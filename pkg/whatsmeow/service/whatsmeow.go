@@ -12,9 +12,11 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/image/webp"
@@ -88,6 +90,8 @@ type whatsmeowService struct {
 	processedMessages  *cache.Cache
 	natsProducer       producer_interfaces.Producer
 	loggerWrapper      *logger_wrapper.LoggerManager
+	startMu            sync.Mutex
+	startingInstances  map[string]bool
 }
 
 type MyClient struct {
@@ -145,6 +149,20 @@ type ProxyConfig struct {
 	Password string `json:"password"`
 	Port     string `json:"port"`
 	Username string `json:"username"`
+}
+
+func hasMediaStorage(storage storage_interfaces.MediaStorage) bool {
+	if storage == nil {
+		return false
+	}
+
+	value := reflect.ValueOf(storage)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
 }
 
 func (w whatsmeowService) ReconnectClient(instanceId string) error {
@@ -1430,7 +1448,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 				// Only process storage if download was successful
 				if err == nil && len(data) > 0 {
-					if mycli.config.MinioEnabled {
+					useExternalMediaStorage := mycli.config != nil && mycli.config.MinioEnabled && hasMediaStorage(mycli.mediaStorage)
+					if mycli.config != nil && mycli.config.MinioEnabled && !useExternalMediaStorage {
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Minio/S3 is enabled but media storage is not initialized; falling back to base64 - ID: %s", mycli.userID, evt.Info.ID)
+					}
+
+					if useExternalMediaStorage {
 						fileName := evt.Info.ID + extension
 						storageStart := time.Now()
 
@@ -2029,6 +2052,20 @@ func (w *whatsmeowService) sendToQueueOrWebhook(instance *instance_model.Instanc
 }
 
 func (w whatsmeowService) StartInstance(instanceId string) error {
+	w.startMu.Lock()
+	if w.startingInstances[instanceId] {
+		w.startMu.Unlock()
+		w.loggerWrapper.GetLogger(instanceId).LogWarn("[%s] StartInstance skipped because instance startup is already in progress", instanceId)
+		return nil
+	}
+	w.startingInstances[instanceId] = true
+	w.startMu.Unlock()
+	defer func() {
+		w.startMu.Lock()
+		delete(w.startingInstances, instanceId)
+		w.startMu.Unlock()
+	}()
+
 	instance, err := w.instanceRepository.GetInstanceByID(instanceId)
 	if err != nil {
 		return err
@@ -2042,6 +2079,16 @@ func (w whatsmeowService) StartInstance(instanceId string) error {
 			w.loggerWrapper.GetLogger(instanceId).LogError("[%s] Failed to update instance: %s", instanceId, err)
 			return err
 		}
+	}
+
+	if existing := w.clientPointer[instance.Id]; existing != nil {
+		if existing.IsConnected() {
+			w.loggerWrapper.GetLogger(instanceId).LogInfo("[%s] StartInstance skipped because client is already connected", instance.Id)
+			return nil
+		}
+
+		w.loggerWrapper.GetLogger(instanceId).LogInfo("[%s] StartInstance skipped because client already exists and is reconnecting/awaiting QR", instance.Id)
+		return nil
 	}
 
 	w.loggerWrapper.GetLogger(instanceId).LogInfo("[%s] Starting client", instance.Id)
@@ -2504,6 +2551,7 @@ func NewWhatsmeowService(
 		processedMessages:  cache.New(30*time.Minute, 1*time.Hour),
 		natsProducer:       natsProducer,
 		loggerWrapper:      loggerWrapper,
+		startingInstances:  make(map[string]bool),
 	}
 }
 
