@@ -143,6 +143,39 @@ func (h *Handler) UpdateAdvancedSettings(c *gin.Context) {
 	sharedhandler.WriteJSON(c, http.StatusOK, payload)
 }
 
+func (h *Handler) SendText(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+
+	var input SendTextInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   err.Error(),
+			"message": "payload inválido para envío de texto",
+		})
+		return
+	}
+
+	message, instance, err := h.service.SendText(c.Request.Context(), identity.TenantID, instanceReferenceFromParams(c), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	payload := gin.H{
+		"message":      "success",
+		"instance_id":  "",
+		"instanceName": "",
+		"data":         message,
+	}
+	if instance != nil {
+		payload["instance_id"] = instance.ID
+		payload["instanceName"] = instance.Name
+		payload["engine_instance_id"] = instance.EngineInstanceID
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, payload)
+}
+
 func (h *Handler) GetByID(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	instance, err := h.service.Get(c.Request.Context(), identity.TenantID, c.Param("instanceID"))

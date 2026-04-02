@@ -58,6 +58,9 @@ This worklog reflects the current branch/worktree state as audited from the back
 - Added advanced settings routes to persist `ignoreGroups` and `ignoreStatus`
 - Added instance token aliases in instance/status/QR payloads
 - Disabled noisy global webhook usage by allowing empty `WEBHOOK_URL`
+- Added tenant-safe instance-scoped integration routes from the frontend gap report
+- Fully implemented `websocket`, `rabbitmq`, and `proxy` instance routes through the legacy runtime bridge
+- Registered explicit `501 partial` routes for unsupported chat lookup and integration suites instead of reviving legacy `:instanceName` APIs
 
 ## Why it was changed
 
@@ -123,11 +126,13 @@ High-signal backend areas touched in this branch/worktree include:
 - broadcast processing is still a stub
 - dashboard metrics include placeholder counters
 - SQL migration file exists, but startup still uses GORM auto-migration
+- most legacy instance integration pages remain partial because the current SaaS backend has no tenant-safe repository/runtime model for Chatwoot, OpenAI bot CRUD, Typebot, Dify, N8N, EvoAI, Evolution Bot, Flowise, SQS, or legacy chat history search
 
 ## Follow-up tasks for frontend adaptation
 
 - Move advanced settings toggles to `GET/PUT /instance/:id/advanced-settings`
-- Stop calling stale `/n8n/*` routes from the panel
+- Move instance integration pages to the new `/instance/:id/...` SaaS routes
+- Treat `501` partial integration responses as unsupported UI states instead of generic failures
 - Normalize frontend data access to prefer `response.data.data ?? response.data`
 - Fix routes that concatenate `/manager/...//manager/...`
 - Ensure protected instance/settings queries always use the authenticated Axios client

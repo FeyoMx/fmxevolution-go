@@ -190,6 +190,97 @@ Notes:
 
 - these settings are not persisted in the SaaS `instances` table today; they are stored in the bridged legacy instance model
 
+### Instance-scoped integration routes
+
+These routes were added from the frontend instance/integration gap report without reviving legacy `:instanceName` contracts. Every route below is tenant-scoped through auth + tenant middleware and resolves `:id` against the current tenant only.
+
+#### Chat surface
+
+| Method | Path | Roles | Request body | Success response | Status |
+|---|---|---|---|---|---|
+| `POST` | `/instance/:id/messages/text` | owner, admin, agent | `{ number, text, delay? }` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
+| `POST` | `/instance/id/:instanceID/messages/text` | owner, admin, agent | same as above | same | implemented |
+| `POST` | `/instance/:id/chats/search` | owner, admin, agent | legacy-compatible search payload | `501` partial response | partial |
+| `POST` | `/instance/:id/messages/search` | owner, admin, agent | legacy-compatible search payload | `501` partial response | partial |
+| `POST` | `/instance/:id/messages/media` | owner, admin, agent | legacy media payload | `501` partial response | partial |
+| `POST` | `/instance/:id/messages/audio` | owner, admin, agent | legacy audio payload | `501` partial response | partial |
+
+Partial chat routes are registered explicitly so the API reports a truthful unsupported state instead of silently 404ing.
+
+#### Event connectors and proxy
+
+| Method | Path | Roles | Request body | Success response | Status |
+|---|---|---|---|---|---|
+| `GET` | `/instance/:id/websocket` | owner, admin, agent | none | `{ enabled, events }` | implemented |
+| `PUT` | `/instance/:id/websocket` | owner, admin | `{ enabled, events }` or `{ websocket: { enabled, events } }` | `{ enabled, events }` | implemented |
+| `GET` | `/instance/:id/rabbitmq` | owner, admin, agent | none | `{ enabled, events }` | implemented |
+| `PUT` | `/instance/:id/rabbitmq` | owner, admin | `{ enabled, events }` or `{ rabbitmq: { enabled, events } }` | `{ enabled, events }` | implemented |
+| `GET` | `/instance/:id/proxy` | owner, admin, agent | none | `{ enabled, host, port, protocol, username?, password? }` | implemented |
+| `PUT` | `/instance/:id/proxy` | owner, admin | `{ enabled, host, port, protocol, username?, password? }` | same | implemented |
+| `GET` | `/instance/:id/sqs` | owner, admin, agent | none | `501` partial response | partial |
+| `PUT` | `/instance/:id/sqs` | owner, admin | any | `501` partial response | partial |
+
+Implementation notes:
+
+- websocket and rabbitmq settings bridge to the legacy instance model and sync runtime settings when the bridge is available
+- proxy currently supports only `socks5`; any other protocol returns `400`
+- when websocket/rabbitmq are enabled with no explicit events, the backend falls back to existing events or `["MESSAGE"]`
+
+#### Unsupported integration suites registered as explicit partials
+
+The following routes are intentionally registered and return `501` with a structured partial response because the current backend does not have tenant-safe repository/runtime support for them:
+
+- `GET/PUT /instance/:id/chatwoot`
+- `GET/POST /instance/:id/openai`
+- `GET/PUT/DELETE /instance/:id/openai/:resourceId`
+- `GET/PUT /instance/:id/openai/settings`
+- `GET /instance/:id/openai/:resourceId/sessions`
+- `POST /instance/:id/openai/status`
+- `GET/POST /instance/:id/typebot`
+- `GET/PUT/DELETE /instance/:id/typebot/:resourceId`
+- `GET/PUT /instance/:id/typebot/settings`
+- `GET /instance/:id/typebot/:resourceId/sessions`
+- `POST /instance/:id/typebot/status`
+- `GET/POST /instance/:id/dify`
+- `GET/PUT/DELETE /instance/:id/dify/:resourceId`
+- `GET/PUT /instance/:id/dify/settings`
+- `GET /instance/:id/dify/:resourceId/sessions`
+- `POST /instance/:id/dify/status`
+- `GET/POST /instance/:id/n8n`
+- `GET/PUT/DELETE /instance/:id/n8n/:resourceId`
+- `GET/PUT /instance/:id/n8n/settings`
+- `GET /instance/:id/n8n/:resourceId/sessions`
+- `POST /instance/:id/n8n/status`
+- `GET/POST /instance/:id/evoai`
+- `GET/PUT/DELETE /instance/:id/evoai/:resourceId`
+- `GET/PUT /instance/:id/evoai/settings`
+- `GET /instance/:id/evoai/:resourceId/sessions`
+- `POST /instance/:id/evoai/status`
+- `GET/POST /instance/:id/evolutionBot`
+- `GET/PUT/DELETE /instance/:id/evolutionBot/:resourceId`
+- `GET/PUT /instance/:id/evolutionBot/settings`
+- `GET /instance/:id/evolutionBot/:resourceId/sessions`
+- `POST /instance/:id/evolutionBot/status`
+- `GET/POST /instance/:id/flowise`
+- `GET/PUT/DELETE /instance/:id/flowise/:resourceId`
+- `GET/PUT /instance/:id/flowise/settings`
+- `GET /instance/:id/flowise/:resourceId/sessions`
+- `POST /instance/:id/flowise/status`
+
+Partial response shape:
+
+```json
+{
+  "feature": "openai",
+  "status": "partial",
+  "implemented": false,
+  "message": "This route is intentionally registered as a partial implementation because the current backend cannot complete it safely without reviving unsupported legacy patterns.",
+  "instance_id": "uuid",
+  "instanceName": "MyInstance",
+  "blocked_by": ["..."]
+}
+```
+
 ## CRM
 
 ### Contacts
@@ -290,6 +381,21 @@ These routes are **not** registered in `cmd/api` and should be treated as stale 
 
 - `/n8n/find/:instanceName`
 - `/n8n/fetchSettings/:instanceName`
+- `/chat/findChats/:instanceName`
+- `/chat/findMessages/:instanceName`
+- `/message/sendText/:instanceName`
+- `/message/sendMedia/:instanceName`
+- `/message/sendWhatsAppAudio/:instanceName`
+- `/websocket/find/:instanceName`
+- `/websocket/set/:instanceName`
+- `/rabbitmq/find/:instanceName`
+- `/rabbitmq/set/:instanceName`
+- `/sqs/find/:instanceName`
+- `/sqs/set/:instanceName`
+- `/proxy/find/:instanceName`
+- `/proxy/set/:instanceName`
+- `/chatwoot/find/:instanceName`
+- `/chatwoot/set/:instanceName`
 - older manager-oriented route sets documented in `docs/swagger.*`
 
 For the SaaS layer, `internal/server/server.go` is the source of truth.

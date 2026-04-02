@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,20 +11,27 @@ import (
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 	legacyInstanceModel "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
+	legacyInstanceService "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
 )
 
 type Service struct {
-	repo          repository.InstanceRepository
-	runtime       Runtime
+	repo           repository.InstanceRepository
+	runtime        Runtime
 	runtimeFactory func() (Runtime, error)
-	runtimeMu     sync.Mutex
-	logger        *slog.Logger
+	runtimeMu      sync.Mutex
+	logger         *slog.Logger
 }
 
 type CreateInput struct {
 	Name             string `json:"name"`
 	EngineInstanceID string `json:"engine_instance_id"`
 	WebhookURL       string `json:"webhook_url"`
+}
+
+type SendTextInput struct {
+	Number string `json:"number"`
+	Text   string `json:"text"`
+	Delay  int32  `json:"delay"`
 }
 
 func NewService(repo repository.InstanceRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
@@ -412,6 +420,157 @@ func (s *Service) UpdateAdvancedSettings(ctx context.Context, tenantID, referenc
 	return updated, instance, nil
 }
 
+func (s *Service) SendText(ctx context.Context, tenantID, reference string, input SendTextInput) (*SendTextResult, *repository.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if strings.TrimSpace(input.Number) == "" || strings.TrimSpace(input.Text) == "" {
+		return nil, instance, fmt.Errorf("%w: number and text are required", domain.ErrValidation)
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return nil, instance, ensureErr
+		}
+		return nil, instance, fmt.Errorf("runtime unavailable")
+	}
+
+	legacyRuntime, ok := runtime.(*LegacyRuntime)
+	if !ok {
+		return nil, instance, fmt.Errorf("legacy runtime unavailable")
+	}
+
+	message, err := legacyRuntime.SendText(ctx, instance, strings.TrimSpace(input.Number), input.Text)
+	if err != nil {
+		return nil, instance, err
+	}
+
+	return message, instance, nil
+}
+
+func (s *Service) GetWebsocketConfig(ctx context.Context, tenantID, reference string) (*EventConnectorConfig, *repository.Instance, error) {
+	instance, _, legacyInstance, err := s.resolveLegacyInstance(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &EventConnectorConfig{
+		Enabled: normalizedConnectorEnabled(legacyInstance.WebSocketEnable),
+		Events:  parseLegacyEvents(legacyInstance.Events),
+	}, instance, nil
+}
+
+func (s *Service) SetWebsocketConfig(ctx context.Context, tenantID, reference string, input EventConnectorConfig) (*EventConnectorConfig, *repository.Instance, error) {
+	instance, legacyRuntime, legacyInstance, err := s.resolveLegacyInstance(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	events, err := normalizeRequestedEvents(input.Events, legacyInstance.Events, input.Enabled)
+	if err != nil {
+		return nil, instance, err
+	}
+
+	legacyInstance.WebSocketEnable = connectorState(input.Enabled)
+	legacyInstance.Events = strings.Join(events, ",")
+	if err := legacyRuntime.legacyRepo.Update(legacyInstance); err != nil {
+		return nil, instance, err
+	}
+	s.syncLegacyInstanceSettings(instance, legacyRuntime)
+
+	return &EventConnectorConfig{
+		Enabled: input.Enabled,
+		Events:  events,
+	}, instance, nil
+}
+
+func (s *Service) GetRabbitMQConfig(ctx context.Context, tenantID, reference string) (*EventConnectorConfig, *repository.Instance, error) {
+	instance, _, legacyInstance, err := s.resolveLegacyInstance(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &EventConnectorConfig{
+		Enabled: normalizedConnectorEnabled(legacyInstance.RabbitmqEnable),
+		Events:  parseLegacyEvents(legacyInstance.Events),
+	}, instance, nil
+}
+
+func (s *Service) SetRabbitMQConfig(ctx context.Context, tenantID, reference string, input EventConnectorConfig) (*EventConnectorConfig, *repository.Instance, error) {
+	instance, legacyRuntime, legacyInstance, err := s.resolveLegacyInstance(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	events, err := normalizeRequestedEvents(input.Events, legacyInstance.Events, input.Enabled)
+	if err != nil {
+		return nil, instance, err
+	}
+
+	legacyInstance.RabbitmqEnable = connectorState(input.Enabled)
+	legacyInstance.Events = strings.Join(events, ",")
+	if err := legacyRuntime.legacyRepo.Update(legacyInstance); err != nil {
+		return nil, instance, err
+	}
+	s.syncLegacyInstanceSettings(instance, legacyRuntime)
+
+	return &EventConnectorConfig{
+		Enabled: input.Enabled,
+		Events:  events,
+	}, instance, nil
+}
+
+func (s *Service) GetProxyConfig(ctx context.Context, tenantID, reference string) (*ProxyConfig, *repository.Instance, error) {
+	instance, _, legacyInstance, err := s.resolveLegacyInstance(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return parseProxyConfig(legacyInstance.Proxy), instance, nil
+}
+
+func (s *Service) SetProxyConfig(ctx context.Context, tenantID, reference string, input ProxyConfig) (*ProxyConfig, *repository.Instance, error) {
+	instance, legacyRuntime, _, err := s.resolveLegacyInstance(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	normalized, err := normalizeProxyConfig(input)
+	if err != nil {
+		return nil, instance, err
+	}
+
+	if !normalized.Enabled {
+		if err := legacyRuntime.legacySvc.RemoveProxy(instance.EngineInstanceID); err != nil {
+			if err := legacyRuntime.legacySvc.RemoveProxy(instance.ID); err != nil {
+				return nil, instance, err
+			}
+		}
+		return &normalized, instance, nil
+	}
+
+	if err := legacyRuntime.legacySvc.SetProxyFromStruct(instance.EngineInstanceID, &legacyInstanceService.SetProxyStruct{
+		Host:     normalized.Host,
+		Port:     normalized.Port,
+		Username: normalized.Username,
+		Password: normalized.Password,
+	}); err != nil {
+		if err := legacyRuntime.legacySvc.SetProxyFromStruct(instance.ID, &legacyInstanceService.SetProxyStruct{
+			Host:     normalized.Host,
+			Port:     normalized.Port,
+			Username: normalized.Username,
+			Password: normalized.Password,
+		}); err != nil {
+			return nil, instance, err
+		}
+	}
+
+	return &normalized, instance, nil
+}
+
 func (s *Service) resolve(ctx context.Context, tenantID, reference string) (*repository.Instance, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
@@ -435,6 +594,197 @@ func (s *Service) resolve(ctx context.Context, tenantID, reference string) (*rep
 	}
 
 	return nil, fmt.Errorf("%w: instance not found", domain.ErrNotFound)
+}
+
+func (s *Service) resolveLegacyInstance(ctx context.Context, tenantID, reference string) (*repository.Instance, *LegacyRuntime, *legacyInstanceModel.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, nil, nil, ensureErr
+		}
+		return instance, nil, nil, fmt.Errorf("runtime unavailable")
+	}
+
+	legacyRuntime, ok := runtime.(*LegacyRuntime)
+	if !ok {
+		return instance, nil, nil, fmt.Errorf("legacy runtime unavailable")
+	}
+
+	legacyInstance, err := legacyRuntime.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return instance, legacyRuntime, nil, err
+	}
+
+	return instance, legacyRuntime, legacyInstance, nil
+}
+
+func (s *Service) syncLegacyInstanceSettings(instance *repository.Instance, legacyRuntime *LegacyRuntime) {
+	if instance == nil || legacyRuntime == nil || legacyRuntime.whatsmeowSvc == nil {
+		return
+	}
+
+	if err := legacyRuntime.whatsmeowSvc.UpdateInstanceSettings(instance.EngineInstanceID); err != nil {
+		if retryErr := legacyRuntime.whatsmeowSvc.UpdateInstanceSettings(instance.ID); retryErr != nil && s.logger != nil {
+			s.logger.Warn("sync instance connector settings failed", "instance_id", instance.ID, "error", retryErr)
+		}
+	}
+}
+
+func normalizeRequestedEvents(events []string, existing string, enabled bool) ([]string, error) {
+	if !enabled {
+		if len(events) == 0 {
+			return parseLegacyEvents(existing), nil
+		}
+	}
+
+	normalized := make([]string, 0, len(events))
+	seen := make(map[string]struct{}, len(events))
+	for _, event := range events {
+		value := strings.ToUpper(strings.TrimSpace(event))
+		if value == "" {
+			continue
+		}
+		if !isSupportedInstanceEvent(value) {
+			return nil, fmt.Errorf("%w: unsupported event %q", domain.ErrValidation, value)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+
+	if len(normalized) > 0 {
+		return normalized, nil
+	}
+
+	if current := parseLegacyEvents(existing); len(current) > 0 {
+		return current, nil
+	}
+
+	return []string{"MESSAGE"}, nil
+}
+
+func parseLegacyEvents(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+
+	parts := strings.Split(raw, ",")
+	events := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.ToUpper(strings.TrimSpace(part))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		events = append(events, value)
+	}
+	return events
+}
+
+func normalizedConnectorEnabled(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "enabled", "global", "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func connectorState(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func parseProxyConfig(raw string) *ProxyConfig {
+	config := &ProxyConfig{
+		Enabled:  false,
+		Protocol: "socks5",
+	}
+	if strings.TrimSpace(raw) == "" {
+		return config
+	}
+
+	type proxyJSON struct {
+		Host     string `json:"host"`
+		Port     string `json:"port"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	var payload proxyJSON
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return config
+	}
+
+	config.Host = strings.TrimSpace(payload.Host)
+	config.Port = strings.TrimSpace(payload.Port)
+	config.Username = strings.TrimSpace(payload.Username)
+	config.Password = strings.TrimSpace(payload.Password)
+	config.Enabled = config.Host != "" && config.Port != ""
+	return config
+}
+
+func normalizeProxyConfig(input ProxyConfig) (ProxyConfig, error) {
+	input.Protocol = strings.ToLower(strings.TrimSpace(input.Protocol))
+	if input.Protocol == "" {
+		input.Protocol = "socks5"
+	}
+	if input.Protocol != "socks5" {
+		return ProxyConfig{}, fmt.Errorf("%w: only socks5 proxy protocol is supported", domain.ErrValidation)
+	}
+
+	input.Host = strings.TrimSpace(input.Host)
+	input.Port = strings.TrimSpace(input.Port)
+	input.Username = strings.TrimSpace(input.Username)
+	input.Password = strings.TrimSpace(input.Password)
+
+	if !input.Enabled {
+		return ProxyConfig{
+			Enabled:  false,
+			Protocol: "socks5",
+		}, nil
+	}
+
+	if input.Host == "" || input.Port == "" {
+		return ProxyConfig{}, fmt.Errorf("%w: host and port are required when proxy is enabled", domain.ErrValidation)
+	}
+
+	return input, nil
+}
+
+func isSupportedInstanceEvent(value string) bool {
+	switch value {
+	case "ALL",
+		"MESSAGE",
+		"SEND_MESSAGE",
+		"READ_RECEIPT",
+		"PRESENCE",
+		"HISTORY_SYNC",
+		"CHAT_PRESENCE",
+		"CALL",
+		"CONNECTION",
+		"LABEL",
+		"CONTACT",
+		"GROUP",
+		"NEWSLETTER",
+		"QRCODE":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) applySnapshot(ctx context.Context, instance *repository.Instance, snapshot *RuntimeSnapshot) (*repository.Instance, error) {

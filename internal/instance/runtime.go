@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	_ "modernc.org/sqlite"
 
 	pkgconfig "github.com/EvolutionAPI/evolution-go/pkg/config"
@@ -27,27 +29,28 @@ import (
 	legacyLabelRepo "github.com/EvolutionAPI/evolution-go/pkg/label/repository"
 	legacyLogger "github.com/EvolutionAPI/evolution-go/pkg/logger"
 	legacyMessageRepo "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
+	"github.com/EvolutionAPI/evolution-go/pkg/utils"
 	legacyWhatsmeow "github.com/EvolutionAPI/evolution-go/pkg/whatsmeow/service"
 
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 )
 
 type RuntimeSnapshot struct {
-	Token          string
-	Webhook        string
-	Events         string
-	JID            string
-	ProfileName    string
-	Connected      bool
-	LoggedIn       bool
-	Status         string
-	QRCode         string
-	PairingCode    string
-	AlwaysOnline   bool
-	RejectCall     bool
-	ReadMessages   bool
-	IgnoreGroups   bool
-	IgnoreStatus   bool
+	Token        string
+	Webhook      string
+	Events       string
+	JID          string
+	ProfileName  string
+	Connected    bool
+	LoggedIn     bool
+	Status       string
+	QRCode       string
+	PairingCode  string
+	AlwaysOnline bool
+	RejectCall   bool
+	ReadMessages bool
+	IgnoreGroups bool
+	IgnoreStatus bool
 }
 
 type Runtime interface {
@@ -56,6 +59,16 @@ type Runtime interface {
 	Snapshot(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	QRCode(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 }
+
+type SendTextResult struct {
+	MessageID string    `json:"messageId"`
+	ServerID  int64     `json:"serverId"`
+	Chat      string    `json:"chat"`
+	FromMe    bool      `json:"fromMe"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+const sendTextTimeout = 15 * time.Second
 
 func (r *LegacyRuntime) GetAdvancedSettings(ctx context.Context, instance *repository.Instance) (*legacyInstanceModel.AdvancedSettings, error) {
 	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
@@ -85,6 +98,7 @@ type LegacyRuntime struct {
 	legacyDB      *sql.DB
 	legacyRepo    legacyInstanceRepo.InstanceRepository
 	legacySvc     legacyInstanceService.InstanceService
+	whatsmeowSvc  legacyWhatsmeow.WhatsmeowService
 	clientPointer map[string]*whatsmeow.Client
 }
 
@@ -157,14 +171,61 @@ func NewLegacyRuntime(logger *slog.Logger) (*LegacyRuntime, error) {
 		legacyCfg,
 		loggerManager,
 	)
-
 	return &LegacyRuntime{
 		logger:        logger.With("module", "instance_runtime"),
 		legacyCfg:     legacyCfg,
 		legacyDB:      authDB,
 		legacyRepo:    instanceRepository,
 		legacySvc:     instanceService,
+		whatsmeowSvc:  whatsmeowService,
 		clientPointer: clientPointer,
+	}, nil
+}
+
+func (r *LegacyRuntime) SendText(ctx context.Context, instance *repository.Instance, number, text string) (*SendTextResult, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := r.ensureConnectedClient(legacyInstance)
+	if err != nil {
+		return nil, err
+	}
+
+	recipient, ok := utils.ParseJID(strings.TrimSpace(number))
+	if !ok {
+		return nil, fmt.Errorf("invalid recipient number")
+	}
+
+	msg := &waE2E.Message{
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: &text,
+		},
+	}
+
+	messageID := whatsmeow.GenerateMessageID()
+	sendCtx, cancel := context.WithTimeout(ctx, sendTextTimeout)
+	defer cancel()
+
+	response, err := client.SendMessage(sendCtx, recipient, msg, whatsmeow.SendRequestExtra{ID: messageID})
+	if err != nil {
+		if errors.Is(sendCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("send message timed out after %s", sendTextTimeout)
+		}
+		return nil, err
+	}
+
+	return &SendTextResult{
+		MessageID: messageID,
+		ServerID:  int64(response.ServerID),
+		Chat:      recipient.String(),
+		FromMe:    true,
+		Timestamp: time.Now(),
 	}, nil
 }
 
@@ -351,15 +412,15 @@ func (r *LegacyRuntime) ensureLegacyInstance(_ context.Context, instance *reposi
 
 func buildRuntimeSnapshot(instance *legacyInstanceModel.Instance, client *whatsmeow.Client) *RuntimeSnapshot {
 	snapshot := &RuntimeSnapshot{
-		Token:         instance.Token,
-		Webhook:       instance.Webhook,
-		Events:        instance.Events,
-		JID:           instance.Jid,
-		AlwaysOnline:  instance.AlwaysOnline,
-		RejectCall:    instance.RejectCall,
-		ReadMessages:  instance.ReadMessages,
-		IgnoreGroups:  instance.IgnoreGroups,
-		IgnoreStatus:  instance.IgnoreStatus,
+		Token:        instance.Token,
+		Webhook:      instance.Webhook,
+		Events:       instance.Events,
+		JID:          instance.Jid,
+		AlwaysOnline: instance.AlwaysOnline,
+		RejectCall:   instance.RejectCall,
+		ReadMessages: instance.ReadMessages,
+		IgnoreGroups: instance.IgnoreGroups,
+		IgnoreStatus: instance.IgnoreStatus,
 	}
 
 	if parts := strings.Split(instance.Qrcode, "|"); len(parts) >= 2 {
@@ -466,6 +527,28 @@ func (r *LegacyRuntime) ensureReady() error {
 		return fmt.Errorf("legacy client runtime unavailable")
 	}
 	return nil
+}
+
+func (r *LegacyRuntime) ensureConnectedClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
+	client := r.clientPointer[instance.Id]
+	if client != nil && client.IsConnected() {
+		return client, nil
+	}
+
+	if _, _, _, err := r.legacySvc.Connect(&legacyInstanceService.ConnectStruct{
+		WebhookUrl: instance.Webhook,
+	}, instance); err != nil {
+		return nil, err
+	}
+
+	time.Sleep(2 * time.Second)
+
+	client = r.clientPointer[instance.Id]
+	if client == nil || !client.IsConnected() {
+		return nil, fmt.Errorf("no active session found")
+	}
+
+	return client, nil
 }
 
 func isNilInterface(value any) bool {
