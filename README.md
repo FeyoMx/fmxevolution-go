@@ -1,224 +1,106 @@
-<h1 align="center">Evolution Go</h1>
+# Backend Overview
 
-<div align="center">
+This repository currently contains two backend layers:
 
-[![Docker Image](https://img.shields.io/badge/Docker-image-blue)](https://hub.docker.com/r/evoapicloud/evolution-go)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://golang.org/)
-[![GitHub Stars](https://img.shields.io/github/stars/EvolutionAPI/evolution-go)](https://github.com/EvolutionAPI/evolution-go/stargazers)
-[![Documentation](https://img.shields.io/badge/Documentation-Official-green)](https://docs.evolutionfoundation.com.br)
+- `cmd/api` + `internal/*`: the newer multi-tenant SaaS API written around Gin, GORM, JWT auth, tenant-scoped CRUD, webhooks, AI settings, and a bridge into the legacy WhatsApp runtime.
+- `cmd/evolution-go` + `pkg/*`: the legacy Evolution/WhatsApp engine that still owns the WhatsApp session lifecycle, QR generation, webhook production, advanced instance settings, and event ingestion.
 
-</div>
+The active backend work in this branch is centered on the SaaS API. It does not replace the legacy engine yet; instead it orchestrates and syncs with it.
 
-<div align="center"><img src="./public/images/cover.png" width="400"></div>
+## What Is Implemented
 
-## About
+- Multi-tenant tenant/user/instance data model in PostgreSQL via GORM auto-migrations
+- JWT access + refresh token login flow
+- Tenant API key authentication
+- Legacy instance token fallback authentication for protected SaaS routes
+- Tenant-scoped RBAC with `owner`, `admin`, `agent`
+- Rate limiting middleware for broadcast creation and webhook dispatch
+- Instance CRUD plus QR/connect/status bridge into the legacy runtime
+- Legacy compatibility shims for instance settings, webhook payloads, and QR/status response shapes
+- Tenant webhook endpoint registry plus inbound/outbound dispatch
+- AI tenant settings, per-instance AI toggles, async AI reply generation, and outbound webhook emission for generated replies
+- CRM contacts/tags/notes
+- Broadcast job queueing with claim/retry bookkeeping
+- Bootstrap seed for a default tenant and owner user
 
-Evolution Go is a high-performance WhatsApp API built in Go, part of the [Evolution](https://evolutionfoundation.com.br/) ecosystem. It provides a robust, lightweight solution for WhatsApp integration using the [whatsmeow](https://github.com/tulir/whatsmeow) library.
+## Current Limitations
 
-## Features
+- The SaaS API still depends on the legacy runtime for QR, connection status, advanced settings, and WhatsApp event behavior.
+- Broadcast delivery is not wired to WhatsApp sending yet. The processor is currently a stub that marks jobs complete after delegated processing logic is invoked.
+- Dashboard metrics are partial. Instance counts are real; several other counters are placeholder zeros.
+- Redis rate limiting is not implemented yet. Selecting `RATE_LIMIT_BACKEND=redis` currently falls back to in-memory behavior.
+- `migrations/000001_saas_core.sql` exists for reference/manual SQL, but the application itself currently relies on GORM `AutoMigrate`.
+- `docs/swagger.*` and `docs/docs.go` still reflect older/legacy API descriptions and should not be treated as the source of truth for the SaaS layer in this branch.
 
-- **High Performance** — Built with Go for minimal resource usage
-- **RESTful API** — Clean, well-documented REST endpoints with Swagger
-- **Real-time Events** — WebSocket, Webhook, AMQP/RabbitMQ and NATS support
-- **Media Support** — Images, videos, audio, documents with MinIO/S3 storage
-- **Message Storage** — Optional PostgreSQL persistence
-- **QR Code Pairing** — Built-in QR code generation for device linking
-- **License Management** — Built-in licensing with registration, activation, and heartbeat
-- **Docker Ready** — Production-ready Docker configuration
+## Runtime Model
+
+### Entry points
+
+- `cmd/api/main.go`: SaaS API entry point
+- `cmd/evolution-go/main.go`: legacy engine entry point
+
+### Boot sequence for `cmd/api`
+
+1. Load `.env` with `godotenv`
+2. Load SaaS config from `internal/config`
+3. Open PostgreSQL stores through `internal/repository`
+4. Run GORM auto-migrations
+5. Seed default tenant/user if missing
+6. Optionally reset the default admin password in non-production when `RESET_ADMIN_PASSWORD=true`
+7. Build the application services
+8. Try to initialize the legacy runtime bridge
+9. Start background workers for broadcast and AI
+10. Start the Gin HTTP server
 
 ## Quick Start
 
-### Docker (Recommended)
+### Requirements
 
-```bash
-git clone https://github.com/EvolutionAPI/evolution-go.git
-cd evolution-go
-make docker-build
-make docker-run
+- Go 1.25+
+- PostgreSQL for the SaaS database
+- PostgreSQL and SQLite/legacy dependencies required by the legacy runtime bridge
+- A valid `.env` file. See `.env.example` and `docs/backend-env.md`
+
+### Local run
+
+```powershell
+go build -o api.exe ./cmd/api
+.\api.exe
 ```
 
-### Local Development
+### Health check
 
-```bash
-git clone https://github.com/EvolutionAPI/evolution-go.git
-cd evolution-go
-
-# Clone whatsmeow dependency
-git clone git@github.com:EvolutionAPI/whatsmeow.git whatsmeow-lib
-
-# Setup, configure and run
-make setup
-cp .env.example .env
-make dev
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:8080/healthz
 ```
 
-> Run `make help` to see all available commands. See [COMMANDS.md](./COMMANDS.md) for detailed workflows.
+## Auth Overview
 
-## Configuration
+### Public routes
 
-Create a `.env` file:
+- `POST /auth/login`
+- `POST /auth/refresh`
+- `POST /tenant`
+- `GET /healthz`
 
-```env
-# Server
-SERVER_PORT=8080
-CLIENT_NAME=evolution
+### Protected routes
 
-# Security
-GLOBAL_API_KEY=your-secure-api-key-here
+Protected routes accept either:
 
-# Database
-POSTGRES_AUTH_DB=postgresql://postgres:password@localhost:5432/evogo_auth?sslmode=disable
-POSTGRES_USERS_DB=postgresql://postgres:password@localhost:5432/evogo_users?sslmode=disable
-DATABASE_SAVE_MESSAGES=false
+- `Authorization: Bearer <access_token>`
+- `X-API-Key: <tenant_api_key>`
+- `apikey: <tenant_api_key>`
 
-# Logging
-WADEBUG=DEBUG
-LOGTYPE=console
+There is also a compatibility fallback that accepts a legacy instance token and resolves it to the owning tenant identity.
 
-# Optional
-# AMQP_URL=amqp://guest:guest@localhost:5672/
-# NATS_URL=nats://localhost:4222
-# WEBHOOK_URL=https://your-webhook-url.com/webhook
-# MINIO_ENABLED=true
-# MINIO_ENDPOINT=localhost:9000
-# MINIO_ACCESS_KEY=minioadmin
-# MINIO_SECRET_KEY=minioadmin
-```
+## Documentation Map
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SERVER_PORT` | Server port | `8080` |
-| `CLIENT_NAME` | Client identifier | `evolution` |
-| `GLOBAL_API_KEY` | API authentication key | **Required** |
-| `DATABASE_SAVE_MESSAGES` | Enable message storage | `false` |
-| `WADEBUG` | WhatsApp debug level | `INFO` |
+- [docs/backend-architecture.md](docs/backend-architecture.md)
+- [docs/backend-api.md](docs/backend-api.md)
+- [docs/backend-env.md](docs/backend-env.md)
+- [docs/backend-worklog.md](docs/backend-worklog.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
-## License Activation
+## Branch Status Notes
 
-Evolution Go requires a license to operate. On first run:
-
-1. Start the server — API endpoints return `503` until activated
-2. Open the **Manager** at `http://localhost:8080/manager/login`
-3. Enter your API URL and `GLOBAL_API_KEY`
-4. Complete the license registration flow
-5. Once activated, the API is fully operational
-
-The license status persists in the database (`runtime_configs` table). Heartbeats are sent periodically to maintain activation.
-
-## API Documentation
-
-Swagger UI available at:
-
-```
-http://localhost:8080/swagger/index.html
-```
-
-### Key Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/instance/create` | Create WhatsApp instance |
-| `GET` | `/instance/{name}/qrcode` | Get QR code for pairing |
-| `POST` | `/message/sendText` | Send text message |
-| `POST` | `/message/sendMedia` | Send media message |
-| `GET` | `/instance/{name}/status` | Get instance status |
-| `DELETE` | `/instance/{name}` | Delete instance |
-
-## Project Structure
-
-```
-evolution-go/
-├── cmd/evolution-go/     # Application entry point
-├── pkg/
-│   ├── core/            # License management & middleware
-│   ├── instance/        # Instance management
-│   ├── message/         # Message handling
-│   ├── sendMessage/     # Message sending
-│   ├── routes/          # HTTP routes
-│   ├── middleware/       # Auth & validation middleware
-│   ├── config/          # Configuration
-│   ├── events/          # Event producers (AMQP, NATS, Webhook, WS)
-│   └── storage/         # Media storage (MinIO)
-├── whatsmeow-lib/       # WhatsApp protocol library
-├── docs/                # Swagger documentation
-├── Dockerfile
-├── Makefile
-└── VERSION
-```
-
-## Technology Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Language | Go 1.24+ |
-| HTTP Framework | Gin |
-| WhatsApp | [whatsmeow](https://github.com/tulir/whatsmeow) |
-| Database | PostgreSQL |
-| ORM | GORM |
-| Message Queue | RabbitMQ, NATS |
-| Object Storage | MinIO/S3 |
-| Documentation | Swagger/OpenAPI |
-| Container | Docker |
-
-## Documentation & Support
-
-| Resource | Link |
-|----------|------|
-| Website | [evolutionfoundation.com.br](https://evolutionfoundation.com.br/) |
-| Documentation | [docs.evolutionfoundation.com.br](https://docs.evolutionfoundation.com.br/) |
-| Community | [evolutionfoundation.com.br/community](https://evolutionfoundation.com.br/community) |
-| WhatsApp Support | [+55 31 7503-8350](https://wa.me/553175038350) |
-| GitHub Issues | [evolution-go/issues](https://github.com/EvolutionAPI/evolution-go/issues) |
-
-## Hosting
-
-Deploy Evolution Go with optimized infrastructure:
-
-| Product | Link |
-|---------|------|
-| Evolution Go VPS | [Hostgator - Evo Go](https://www.hostgator.com.br/52579-144-3-55.html) |
-| Evolution API VPS | [Hostgator - Evo API](https://www.hostgator.com.br/servidor-vps/hospedagem-evo-api/lp-afiliado) |
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## Security
-
-For security concerns, please email: contato@evolution-api.com
-
-## License
-
-Evolution Go is licensed under the Apache License 2.0, with the following additional conditions:
-
-1. **Logo and copyright**: You may not remove or modify the logo or copyright information in the Evolution console or applications when using frontend components.
-
-2. **Usage notification**: If Evolution Go is used as part of any project (including closed-source), a clear notification that Evolution Go is being utilized must be visible to system administrators.
-
-Please contact contato@evolution-api.com for licensing inquiries. Full license details at [apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0).
-
-## Acknowledgments
-
-- [whatsmeow](https://github.com/tulir/whatsmeow) by [tulir](https://github.com/tulir)
-- [Evolution API](https://github.com/EvolutionAPI/evolution-api)
-
-## Telemetry
-
-Evolution Go collects anonymous telemetry data (routes used, API version) to improve the service. No sensitive or personal data is collected.
-
----
-
-<div align="center">
-
-**Evolution Go** — High-Performance WhatsApp API
-
-Made with ❤️ by the [Evolution Team](https://evolutionfoundation.com.br/)
-
-© 2025 Evolution Foundation
-
-</div>
+This branch contains a large untracked/new SaaS surface under `cmd/api`, `internal/`, and `migrations/` compared with the legacy branch baseline. The documentation in this repo has been updated to describe what is actually implemented in code today, including partial areas and known gaps.

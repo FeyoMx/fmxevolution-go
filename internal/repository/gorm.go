@@ -1,0 +1,469 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type Stores struct {
+	DB         *gorm.DB
+	SQL        *sql.DB
+	Tenants    TenantRepository
+	Users      UserRepository
+	Instances  InstanceRepository
+	CRM        CRMRepository
+	Broadcasts BroadcastRepository
+	Webhooks   WebhookRepository
+	AI         AIRepository
+}
+
+func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration) (*Stores, error) {
+	db, err := gorm.Open(postgres.Open(databaseURL), &gorm.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("db handle: %w", err)
+	}
+
+	sqlDB.SetMaxOpenConns(maxOpenConns)
+	sqlDB.SetMaxIdleConns(maxIdleConns)
+	sqlDB.SetConnMaxLifetime(connMaxLifetime)
+
+	if err := db.AutoMigrate(
+		&Tenant{},
+		&User{},
+		&Instance{},
+		&Message{},
+		&Contact{},
+		&Tag{},
+		&Note{},
+		&Pipeline{},
+		&DealStage{},
+		&Deal{},
+		&BroadcastJob{},
+		&WebhookEndpoint{},
+		&WebhookDelivery{},
+		&AISettings{},
+		&AIConversationMessage{},
+	); err != nil {
+		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+
+	return &Stores{
+		DB:         db,
+		SQL:        sqlDB,
+		Tenants:    &gormTenantRepository{db: db},
+		Users:      &gormUserRepository{db: db},
+		Instances:  &gormInstanceRepository{db: db},
+		CRM:        &gormCRMRepository{db: db},
+		Broadcasts: &gormBroadcastRepository{db: db},
+		Webhooks:   &gormWebhookRepository{db: db},
+		AI:         &gormAIRepository{db: db},
+	}, nil
+}
+
+func Close(ctx context.Context, stores *Stores) error {
+	if stores == nil || stores.SQL == nil {
+		return nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- stores.SQL.Close()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
+type gormTenantRepository struct{ db *gorm.DB }
+
+func (r *gormTenantRepository) Create(ctx context.Context, tenant *Tenant) error {
+	return r.db.WithContext(ctx).Create(tenant).Error
+}
+
+func (r *gormTenantRepository) GetByID(ctx context.Context, tenantID string) (*Tenant, error) {
+	var tenant Tenant
+	err := r.db.WithContext(ctx).First(&tenant, "id = ?", tenantID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &tenant, nil
+}
+
+func (r *gormTenantRepository) GetBySlug(ctx context.Context, slug string) (*Tenant, error) {
+	var tenant Tenant
+	err := r.db.WithContext(ctx).First(&tenant, "slug = ?", slug).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &tenant, nil
+}
+
+func (r *gormTenantRepository) GetByAPIKeyPrefix(ctx context.Context, prefix string) (*Tenant, error) {
+	var tenant Tenant
+	err := r.db.WithContext(ctx).First(&tenant, "api_key_prefix = ?", prefix).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &tenant, nil
+}
+
+type gormUserRepository struct{ db *gorm.DB }
+
+func (r *gormUserRepository) Create(ctx context.Context, user *User) error {
+	return r.db.WithContext(ctx).Create(user).Error
+}
+
+func (r *gormUserRepository) GetByEmail(ctx context.Context, tenantID, email string) (*User, error) {
+	var user User
+	err := r.db.WithContext(ctx).First(&user, "tenant_id = ? AND email = ?", tenantID, email).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &user, nil
+}
+
+func (r *gormUserRepository) GetByID(ctx context.Context, tenantID, userID string) (*User, error) {
+	var user User
+	err := r.db.WithContext(ctx).First(&user, "tenant_id = ? AND id = ?", tenantID, userID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &user, nil
+}
+
+type gormInstanceRepository struct{ db *gorm.DB }
+
+func (r *gormInstanceRepository) Create(ctx context.Context, instance *Instance) error {
+	return r.db.WithContext(ctx).Create(instance).Error
+}
+
+func (r *gormInstanceRepository) ListByTenant(ctx context.Context, tenantID string) ([]Instance, error) {
+	var instances []Instance
+	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&instances, "tenant_id = ?", tenantID).Error
+	return instances, err
+}
+
+func (r *gormInstanceRepository) GetByID(ctx context.Context, tenantID, instanceID string) (*Instance, error) {
+	var instance Instance
+	err := r.db.WithContext(ctx).First(&instance, "tenant_id = ? AND id = ?", tenantID, instanceID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &instance, nil
+}
+
+func (r *gormInstanceRepository) FindByEngineInstanceID(ctx context.Context, engineInstanceID string) (*Instance, error) {
+	var instance Instance
+	err := r.db.WithContext(ctx).First(&instance, "engine_instance_id = ?", engineInstanceID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &instance, nil
+}
+
+func (r *gormInstanceRepository) FindByName(ctx context.Context, name string) (*Instance, error) {
+	var instance Instance
+	err := r.db.WithContext(ctx).First(&instance, "lower(name) = lower(?)", name).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &instance, nil
+}
+
+func (r *gormInstanceRepository) Update(ctx context.Context, instance *Instance) error {
+	return r.db.WithContext(ctx).Save(instance).Error
+}
+
+func (r *gormInstanceRepository) Delete(ctx context.Context, tenantID, instanceID string) error {
+	result := r.db.WithContext(ctx).Delete(&Instance{}, "tenant_id = ? AND id = ?", tenantID, instanceID)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+type gormCRMRepository struct{ db *gorm.DB }
+
+func (r *gormCRMRepository) CreateContact(ctx context.Context, contact *Contact) error {
+	return r.db.WithContext(ctx).Create(contact).Error
+}
+
+func (r *gormCRMRepository) GetContact(ctx context.Context, tenantID, contactID string) (*Contact, error) {
+	var contact Contact
+	err := r.db.WithContext(ctx).
+		Preload("Tags").
+		Preload("Notes").
+		First(&contact, "tenant_id = ? AND id = ?", tenantID, contactID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &contact, nil
+}
+
+func (r *gormCRMRepository) ListContacts(ctx context.Context, tenantID string) ([]Contact, error) {
+	var contacts []Contact
+	err := r.db.WithContext(ctx).
+		Preload("Tags").
+		Preload("Notes").
+		Order("created_at DESC").
+		Find(&contacts, "tenant_id = ?", tenantID).Error
+	return contacts, err
+}
+
+func (r *gormCRMRepository) UpdateContact(ctx context.Context, contact *Contact) error {
+	return r.db.WithContext(ctx).Session(&gorm.Session{FullSaveAssociations: true}).Save(contact).Error
+}
+
+func (r *gormCRMRepository) FindContactByPhone(ctx context.Context, tenantID, phone string) (*Contact, error) {
+	var contact Contact
+	err := r.db.WithContext(ctx).First(&contact, "tenant_id = ? AND phone = ?", tenantID, phone).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &contact, nil
+}
+
+func (r *gormCRMRepository) CreateTag(ctx context.Context, tag *Tag) error {
+	return r.db.WithContext(ctx).Create(tag).Error
+}
+
+func (r *gormCRMRepository) FindTagByName(ctx context.Context, tenantID, name string) (*Tag, error) {
+	var tag Tag
+	err := r.db.WithContext(ctx).First(&tag, "tenant_id = ? AND lower(name) = lower(?)", tenantID, name).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &tag, nil
+}
+
+func (r *gormCRMRepository) AssignTags(ctx context.Context, tenantID, contactID string, tagIDs []string) error {
+	var contact Contact
+	if err := r.db.WithContext(ctx).First(&contact, "tenant_id = ? AND id = ?", tenantID, contactID).Error; err != nil {
+		return normalizeError(err)
+	}
+
+	var tags []Tag
+	if err := r.db.WithContext(ctx).Find(&tags, "tenant_id = ? AND id IN ?", tenantID, tagIDs).Error; err != nil {
+		return err
+	}
+
+	return r.db.WithContext(ctx).Model(&contact).Association("Tags").Replace(tags)
+}
+
+func (r *gormCRMRepository) CreateNote(ctx context.Context, note *Note) error {
+	return r.db.WithContext(ctx).Create(note).Error
+}
+
+type gormBroadcastRepository struct{ db *gorm.DB }
+
+func (r *gormBroadcastRepository) Create(ctx context.Context, job *BroadcastJob) error {
+	return r.db.WithContext(ctx).Create(job).Error
+}
+
+func (r *gormBroadcastRepository) GetByID(ctx context.Context, tenantID, jobID string) (*BroadcastJob, error) {
+	var job BroadcastJob
+	err := r.db.WithContext(ctx).First(&job, "tenant_id = ? AND id = ?", tenantID, jobID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &job, nil
+}
+
+func (r *gormBroadcastRepository) ListByTenant(ctx context.Context, tenantID string, limit int) ([]BroadcastJob, error) {
+	var jobs []BroadcastJob
+	query := r.db.WithContext(ctx).
+		Where("tenant_id = ?", tenantID).
+		Order("created_at DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&jobs).Error
+	return jobs, err
+}
+
+func (r *gormBroadcastRepository) ClaimNext(ctx context.Context, workerID string, limit int, now time.Time) ([]BroadcastJob, error) {
+	jobs := make([]BroadcastJob, 0, limit)
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("status = ? AND available_at <= ?", "queued", now).
+			Order("available_at ASC, created_at ASC")
+		if limit > 0 {
+			query = query.Limit(limit)
+		}
+
+		if err := query.Find(&jobs).Error; err != nil {
+			return err
+		}
+		if len(jobs) == 0 {
+			return nil
+		}
+
+		jobIDs := make([]string, 0, len(jobs))
+		for i := range jobs {
+			jobIDs = append(jobIDs, jobs[i].ID)
+		}
+
+		return tx.Model(&BroadcastJob{}).
+			Where("id IN ?", jobIDs).
+			Updates(map[string]any{
+				"status":     "processing",
+				"worker_id":  workerID,
+				"started_at": now,
+				"attempts":   gorm.Expr("attempts + 1"),
+			}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range jobs {
+		jobs[i].Status = "processing"
+		jobs[i].WorkerID = workerID
+		jobs[i].StartedAt = &now
+		jobs[i].Attempts++
+	}
+
+	return jobs, nil
+}
+
+func (r *gormBroadcastRepository) MarkCompleted(ctx context.Context, tenantID, jobID string, completedAt time.Time) error {
+	result := r.db.WithContext(ctx).
+		Model(&BroadcastJob{}).
+		Where("tenant_id = ? AND id = ?", tenantID, jobID).
+		Updates(map[string]any{
+			"status":       "completed",
+			"completed_at": completedAt,
+			"last_error":   "",
+			"worker_id":    "",
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (r *gormBroadcastRepository) MarkFailed(ctx context.Context, tenantID, jobID, message string, failedAt time.Time, retryAt *time.Time) error {
+	updates := map[string]any{
+		"last_error": message,
+		"worker_id":  "",
+		"started_at": nil,
+	}
+	if retryAt != nil {
+		updates["status"] = "queued"
+		updates["available_at"] = *retryAt
+	} else {
+		updates["status"] = "failed"
+		updates["failed_at"] = failedAt
+	}
+
+	result := r.db.WithContext(ctx).
+		Model(&BroadcastJob{}).
+		Where("tenant_id = ? AND id = ?", tenantID, jobID).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+type gormWebhookRepository struct{ db *gorm.DB }
+
+func (r *gormWebhookRepository) Create(ctx context.Context, endpoint *WebhookEndpoint) error {
+	return r.db.WithContext(ctx).Create(endpoint).Error
+}
+
+func (r *gormWebhookRepository) GetByID(ctx context.Context, tenantID, endpointID string) (*WebhookEndpoint, error) {
+	var endpoint WebhookEndpoint
+	err := r.db.WithContext(ctx).First(&endpoint, "tenant_id = ? AND id = ?", tenantID, endpointID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &endpoint, nil
+}
+
+func (r *gormWebhookRepository) ListByTenant(ctx context.Context, tenantID string) ([]WebhookEndpoint, error) {
+	var endpoints []WebhookEndpoint
+	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&endpoints, "tenant_id = ?", tenantID).Error
+	return endpoints, err
+}
+
+type gormAIRepository struct{ db *gorm.DB }
+
+func (r *gormAIRepository) Upsert(ctx context.Context, settings *AISettings) error {
+	var existing AISettings
+	err := r.db.WithContext(ctx).First(&existing, "tenant_id = ?", settings.TenantID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return r.db.WithContext(ctx).Create(settings).Error
+	}
+	if err != nil {
+		return err
+	}
+
+	settings.ID = existing.ID
+	return r.db.WithContext(ctx).Save(settings).Error
+}
+
+func (r *gormAIRepository) GetByTenant(ctx context.Context, tenantID string) (*AISettings, error) {
+	var settings AISettings
+	err := r.db.WithContext(ctx).First(&settings, "tenant_id = ?", tenantID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &settings, nil
+}
+
+func (r *gormAIRepository) AppendConversationMessage(ctx context.Context, message *AIConversationMessage) error {
+	return r.db.WithContext(ctx).Create(message).Error
+}
+
+func (r *gormAIRepository) ListConversationMessages(ctx context.Context, tenantID, instanceID, conversationKey string, limit int) ([]AIConversationMessage, error) {
+	var messages []AIConversationMessage
+	query := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND instance_id = ? AND conversation_key = ?", tenantID, instanceID, conversationKey).
+		Order("created_at DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&messages).Error; err != nil {
+		return nil, err
+	}
+	// reverse to chronological order
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+	return messages, nil
+}
+
+func normalizeError(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("record not found: %w", err)
+	}
+	return err
+}

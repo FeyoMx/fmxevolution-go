@@ -3,7 +3,6 @@ module github.com/EvolutionAPI/evolution-go
 go 1.25.0
 
 require (
-	github.com/EvolutionAPI/evo-gate v0.1.2
 	github.com/chai2010/webp v1.1.1
 	github.com/gabriel-vasile/mimetype v1.4.5
 	github.com/gin-gonic/gin v1.10.0
@@ -22,6 +21,7 @@ require (
 	github.com/swaggo/swag v1.16.3
 	github.com/vincent-petithory/dataurl v1.0.0
 	go.mau.fi/whatsmeow v0.0.0-00010101000000-000000000000
+	golang.org/x/crypto v0.48.0
 	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410
 	golang.org/x/net v0.50.0
@@ -86,7 +86,6 @@ require (
 	go.mau.fi/libsignal v0.2.1 // indirect
 	go.mau.fi/util v0.9.6 // indirect
 	golang.org/x/arch v0.10.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

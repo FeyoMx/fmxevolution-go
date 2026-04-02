@@ -1,245 +1,50 @@
-# Evolution GO - Changelog
+# Changelog
 
-## v0.6.1
+## Unreleased
 
-### 🆕 New Features
-- **Group invite info endpoint** — `GET /group/invite-info` to get group details from invite link
-- **Enhanced media sending** — GIF playback, video stickers, and transparent sticker support
+### Backend architecture
 
-### 🐛 Bug Fixes
-- **Admin revoke** — Allow deleting messages from others in groups (admin revoke)
+- Added a new SaaS API entry point under `cmd/api`
+- Added a new `internal/` application layer for auth, tenancy, instances, CRM, broadcast, webhooks, AI, middleware, repository, bootstrap, and server wiring
+- Added `migrations/000001_saas_core.sql` as a SQL baseline for the SaaS schema
+- Added structured JSON logging helper in `pkg/logger/structured.go`
 
-### 🔧 Improvements
-- **Version management** — Reads version from `VERSION` file with ldflags fallback
-- **CORS global middleware** — Applied before all routes
-- **Makefile compatibility** — Fixed `$(shell)` syntax for GNU Make 3.81 (macOS default)
-- **CI/CD cleanup** — Removed `develop` branch trigger and `homolog` tag from Docker workflow
-- **README updated** — New links, documentation, and hosting info
+### Multi-tenancy and auth
 
-## v0.6.0
+- Added tenant, user, and tenant-scoped repository models
+- Added stateless JWT access and refresh token handling
+- Added tenant API key hashing and verification
+- Added RBAC role checks for `owner`, `admin`, and `agent`
+- Added tenant middleware to enforce authenticated tenant context and optional tenant header matching
+- Added fallback auth that accepts legacy instance tokens and maps them to the owning tenant identity
 
-### 🆕 New Features
-- **Version from VERSION file** — Reads version from `VERSION` file at startup instead of hardcoded value
+### SaaS domain modules
 
-### 🔧 Improvements
-- **Makefile compatibility** — Fixed `$(shell)` syntax for GNU Make 3.81 (macOS default)
+- Added CRM contacts, tags, and notes modules
+- Added broadcast queueing, worker claiming, retry scheduling, and rate pacing
+- Added tenant webhook endpoint registry and outbound/inbound dispatch
+- Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
+- Added dashboard metrics endpoint with real instance counts and placeholder aggregates for other totals
 
-## v0.5.4
+### Legacy runtime bridge and compatibility
 
-### 🔧 Improvements
-- **Update whatsmeow lib**
+- Added a runtime bridge from the SaaS API into the legacy instance/WhatsApp engine
+- Added normalized QR and status response envelopes for frontend compatibility
+- Added compatibility for legacy webhook payloads and instance-name-based webhook updates
+- Added compatibility aliases for instance token/api key fields in instance responses
+- Added advanced settings bridge routes so frontend toggles can persist `ignoreGroups`, `ignoreStatus`, and related legacy instance flags
+- Added guard logic to avoid duplicate concurrent instance startup attempts
+- Added safer media-storage fallback behavior when MinIO is enabled but runtime storage is not initialized
 
-## v0.5.3
+### Configuration and examples
 
-**Docker:** `evoapicloud/evolution-go:0.5.3`
+- Replaced stale root `.env.example` with a current example covering both the SaaS API config and the legacy runtime bridge
+- Updated `docker/examples/.env.example` to reflect the current runtime variables
+- Ignored generated local runtime artifacts such as `api.exe`, `api.pid`, and `api*.log`
 
-### 🔧 Improvements
+### Known partial areas
 
-- **Update context handling in service methods** 
-  - Refactored multiple service methods across various packages to include `context.Background()` as the first argument in client calls. This change ensures that all client interactions are properly context-aware, allowing for better cancellation and timeout management.
-  - Updated methods in `call_service.go`, `community_service.go`, `group_service.go`, `message_service.go`, `newsletter_service.go`, `send_service.go`, `user_service.go`, and `whatsmeow.go` to enhance consistency and reliability in handling requests.
-  - This adjustment improves the overall robustness of the API by ensuring that all client calls can leverage context for better control over execution flow and resource management.
-
-## v0.5.2
-
-**Docker:** `evoapicloud/evolution-go:0.5.2`
-
-### 🆕 New Features
-- **SetProxy Endpoint**: New endpoint `POST /instance/proxy/{instanceId}` to configure proxy for instances
-  - Support for proxy with/without authentication
-  - Validation of required fields (host, port)
-  - Automatic cache update via reconnection
-  - Integrated Swagger documentation
-
-### 🔧 Improvements
-- **CheckUser Fallback Logic**: Implemented intelligent fallback logic
-  - If `formatJid=true` returns `IsInWhatsapp=false`, automatically retries with `formatJid=false`
-  - Significant improvement in valid user detection
-  - Added `RemoteJID` field to use WhatsApp-validated JID
-- **LID/WhatsApp JID Swap**: Automatic handling of special cases
-  - When `Sender` comes as `@lid` and `SenderAlt` comes as `@s.whatsapp.net`
-  - Automatic inversion: `Sender` and `Chat` receive `@s.whatsapp.net`, `SenderAlt` receives `@lid`
-  - Detailed logs for tracking swaps
-
-### 🐛 Bug Fixes
-- **SendMessage**: Standardization of WhatsApp-validated `remoteJID` usage
-- **User Validation**: Improvement in phone number validation and formatting
-
----
-
-## v0.5.1
-
-**Docker:** `evoapicloud/evolution-go:0.5.1`
-
-### 🔧 Improvements
-- **Instance Deletion**: Enhance instance deletion and media storage path resolution
-- **Media Storage**: Improvements in media storage and path resolution
-
----
-
-## v0.5.0
-
-**Docker:** `evoapicloud/evolution-go:0.5.0`
-
-### 🔧 Improvements
-- **Media Storage**: Enhance media storage and logging in Whatsmeow event handling
-- **Retry Logic**: Implement retry logic for client connection and message sending
-- **Media Handling**: Enhance media handling in event processing
-
----
-
-## v0.4.9
-
-**Docker:** `evoapicloud/evolution-go:0.4.9`
-
-### 🔧 Improvements
-- **Connection Handling**: Add instance update test scenarios and improve connection handling
-- **FormatJid Field**: Update FormatJid field to pointer type for better handling in message structures
-- **Dependencies**: Update dependencies and fix presence handling in Whatsmeow integration
-
----
-
-## v0.4.8
-
-**Docker:** `evoapicloud/evolution-go:0.4.8`
-
-### 🔧 Improvements
-- **Audio Duration**: Improve audio duration parsing in convertAudioToOpusWithDuration function
-
----
-
-## v0.4.7
-
-**Docker:** `evoapicloud/evolution-go:0.4.7`
-
-### 🔧 Improvements
-- **Phone Number Formatting**: Improve phone number formatting and validation in user service
-- **Brazilian/Portuguese Numbers**: Update Brazilian and Portuguese number formatting in utils
-
-### 🆕 New Features
-- **Media Handling**: Enhance media handling in event processing
-
----
-
-## v0.4.6
-
-**Docker:** `evoapicloud/evolution-go:0.4.6`
-
-### 🆕 New Features
-- **User Existence Check**: Add user existence check configuration and JID validation middleware
-
----
-
-## v0.4.5
-
-**Docker:** `evoapicloud/evolution-go:0.4.5`
-
-### 🔧 Improvements
-- **Dependencies**: Update dependencies and enhance audio conversion functionality
-
----
-
-## v0.4.4
-
-**Docker:** `evoapicloud/evolution-go:0.4.4`
-
-### 🆕 New Features
-- **CLAUDE.md**: Add CLAUDE.md for project documentation and enhance RabbitMQ connection handling
-
----
-
-## v0.4.3
-
-**Docker:** `evoapicloud/evolution-go:0.4.3`
-
-### 🔧 Improvements
-- **PostgreSQL Connection**: Fix in PostgreSQL connection configuration for session auth
-  - Controlled configuration of pool, idle, etc.
-  - Adjustment on top of whatsmeow lib
-- **User Endpoints**: Fix in 'User Info' and 'Check User' endpoints
-  - Now return with contact's LID information
-
----
-
-## v0.3.0
-
-### 🆕 New Features
-- **Own Message Reactions**: Additional 'fromMe' parameter using Chat id
-- **CreatedAt Field**: CreatedAt field added to instances table
-
----
-
-## v0.2.0
-
-### 🆕 New Features
-- **Advanced Settings**: Advanced configurations in instance creation
-  - `alwaysOnline` (still to be implemented)
-  - `rejectCall` - Automatically reject calls
-  - `msgRejectCall` - Call rejection message
-  - `readMessages` - Automatically mark messages as read
-  - `ignoreGroups` - Ignore group messages
-  - `ignoreStatus` - Ignore status messages
-- **Advanced Settings Routes**: New routes for get and update of advanced settings
-- **QR Code Control**: `QRCODE_MAX_COUNT` variable to control how many QR codes to generate before timeout
-- **AMQP Events**: `AMQP_SPECIFIC_EVENTS` variable to individually select which events to receive in RabbitMQ
-
-### 🔧 Improvements
-- **Reconnect Endpoint**: Fix in reconnect endpoint
-- **Sender Info**: `Sender` and `SenderAlt` no longer come with session id, only the id
-
-### 🐛 Bug Fixes
-- **QR Code Generation**: Fix to not generate QR code automatically after disconnection or logout
-
----
-
-## v0.1.0
-
-### 🆕 Initial Features
-- Base implementation of Evolution API in Go
-- WhatsApp integration via whatsmeow
-- Instance system
-- Basic message sending endpoints
-- Webhook support
-- RabbitMQ and NATS integration
-- Authentication system
-- Swagger documentation
-
----
-
-## 📋 Migration Notes
-
-### v0.5.2
-- The new `SetProxy` endpoint requires admin permissions (`AuthAdmin`)
-- The `CheckUser` fallback logic is automatic and transparent
-- LID/WhatsApp JID handling is automatic
-
-### v0.4.3
-- Check PostgreSQL connection settings if using postgres auth
-
-### v0.2.0
-- Review advanced settings configurations if necessary
-- Configure `QRCODE_MAX_COUNT` if you want to limit QR codes
-- Configure `AMQP_SPECIFIC_EVENTS` for specific RabbitMQ events
-
----
-
-## 🔗 Useful Links
-
-- **Docker Hub**: `evoapicloud/evolution-go`
-- **Documentation**: Swagger available at `/swagger/`
-- **GitHub**: [Evolution API Go](https://github.com/EvolutionAPI/evolution-go)
-
----
-
-## 🤝 Contributing
-
-To contribute to the project:
-1. Fork the repository
-2. Create a branch for your feature
-3. Commit your changes
-4. Open a Pull Request
-
----
-
-*Last updated: October 2025*
-
+- Broadcast delivery is still a processor stub and is not yet wired to WhatsApp sending
+- Redis rate limiting is not implemented yet
+- Swagger artifacts under `docs/` still represent older/legacy API surfaces and remain out of sync with `cmd/api`
+- The SaaS API still depends on the legacy engine for QR, connection lifecycle, and advanced instance settings
