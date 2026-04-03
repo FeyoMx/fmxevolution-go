@@ -48,3 +48,4 @@
 - Redis rate limiting is not implemented yet
 - Swagger artifacts under `docs/` still represent older/legacy API surfaces and remain out of sync with `cmd/api`
 - The SaaS API still depends on the legacy engine for QR, connection lifecycle, and advanced instance settings
+- Added `docs/backend-product-readiness.md` as a practical backend readiness snapshot

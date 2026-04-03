@@ -7,6 +7,8 @@ This repository currently contains two backend layers:
 
 The active backend work in this branch is centered on the SaaS API. It does not replace the legacy engine yet; instead it orchestrates and syncs with it.
 
+For a concise status snapshot of what is fully implemented, partial, or unsupported, see `docs/backend-product-readiness.md`.
+
 ## What Is Implemented
 
 - Multi-tenant tenant/user/instance data model in PostgreSQL via GORM auto-migrations
