@@ -30,6 +30,8 @@ func WriteError(c *gin.Context, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, domain.ErrValidation):
 		status = http.StatusBadRequest
+	case errors.Is(err, domain.ErrTimeout):
+		status = http.StatusGatewayTimeout
 	}
 
 	c.JSON(status, ErrorResponse{Error: err.Error()})

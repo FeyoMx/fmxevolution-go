@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
 	_ "modernc.org/sqlite"
 
 	pkgconfig "github.com/EvolutionAPI/evolution-go/pkg/config"
@@ -32,6 +34,7 @@ import (
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
 	legacyWhatsmeow "github.com/EvolutionAPI/evolution-go/pkg/whatsmeow/service"
 
+	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 )
 
@@ -68,7 +71,12 @@ type SendTextResult struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-const sendTextTimeout = 15 * time.Second
+const (
+	sendTextTimeout         = 45 * time.Second
+	sendRetryDelay          = 3 * time.Second
+	clientReadyTimeout      = 8 * time.Second
+	clientReadyPollInterval = 500 * time.Millisecond
+)
 
 func (r *LegacyRuntime) GetAdvancedSettings(ctx context.Context, instance *repository.Instance) (*legacyInstanceModel.AdvancedSettings, error) {
 	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
@@ -100,6 +108,8 @@ type LegacyRuntime struct {
 	legacySvc     legacyInstanceService.InstanceService
 	whatsmeowSvc  legacyWhatsmeow.WhatsmeowService
 	clientPointer map[string]*whatsmeow.Client
+	sendLocks     sync.Map
+	qrLocks       sync.Map
 }
 
 func NewLegacyRuntime(logger *slog.Logger) (*LegacyRuntime, error) {
@@ -192,14 +202,18 @@ func (r *LegacyRuntime) SendText(ctx context.Context, instance *repository.Insta
 		return nil, err
 	}
 
+	sendLock := r.sendLock(legacyInstance.Id)
+	sendLock.Lock()
+	defer sendLock.Unlock()
+
 	client, err := r.ensureConnectedClient(legacyInstance)
 	if err != nil {
 		return nil, err
 	}
 
-	recipient, ok := utils.ParseJID(strings.TrimSpace(number))
-	if !ok {
-		return nil, fmt.Errorf("invalid recipient number")
+	recipient, err := r.resolveTextRecipient(client, legacyInstance, strings.TrimSpace(number))
+	if err != nil {
+		return nil, err
 	}
 
 	msg := &waE2E.Message{
@@ -209,24 +223,52 @@ func (r *LegacyRuntime) SendText(ctx context.Context, instance *repository.Insta
 	}
 
 	messageID := whatsmeow.GenerateMessageID()
-	sendCtx, cancel := context.WithTimeout(ctx, sendTextTimeout)
-	defer cancel()
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			if r.logger != nil {
+				r.logger.Warn(
+					"retrying send text after transient runtime failure",
+					"instance_id", legacyInstance.Id,
+					"number", strings.TrimSpace(number),
+					"recipient", recipient.String(),
+					"attempt", attempt+1,
+					"previous_error", lastErr,
+				)
+			}
+			time.Sleep(sendRetryDelay)
 
-	response, err := client.SendMessage(sendCtx, recipient, msg, whatsmeow.SendRequestExtra{ID: messageID})
-	if err != nil {
-		if errors.Is(sendCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("send message timed out after %s", sendTextTimeout)
+			client, err = r.refreshConnectedClient(legacyInstance)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return nil, err
+
+		sendCtx, cancel := context.WithTimeout(context.Background(), sendTextTimeout)
+		response, err := client.SendMessage(sendCtx, recipient, msg, whatsmeow.SendRequestExtra{ID: messageID})
+		cancel()
+		if err == nil {
+			return &SendTextResult{
+				MessageID: messageID,
+				ServerID:  int64(response.ServerID),
+				Chat:      recipient.String(),
+				FromMe:    true,
+				Timestamp: time.Now(),
+			}, nil
+		}
+
+		if errors.Is(sendCtx.Err(), context.DeadlineExceeded) {
+			lastErr = fmt.Errorf("%w: send message timed out after %s", domain.ErrTimeout, sendTextTimeout)
+			continue
+		}
+
+		lastErr = err
+		if !isTransientSendError(err) {
+			return nil, err
+		}
 	}
 
-	return &SendTextResult{
-		MessageID: messageID,
-		ServerID:  int64(response.ServerID),
-		Chat:      recipient.String(),
-		FromMe:    true,
-		Timestamp: time.Now(),
-	}, nil
+	return nil, lastErr
 }
 
 func (r *LegacyRuntime) Connect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {
@@ -291,16 +333,7 @@ func (r *LegacyRuntime) Snapshot(ctx context.Context, instance *repository.Insta
 		return nil, err
 	}
 
-	snapshot := buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id])
-	if !snapshot.LoggedIn && snapshot.QRCode == "" {
-		qr, qrErr := r.legacySvc.GetQr(legacyInstance)
-		if qrErr == nil && qr != nil {
-			snapshot.QRCode = qr.Qrcode
-			snapshot.PairingCode = qr.Code
-			snapshot.Status = "qrcode"
-		}
-	}
-	return snapshot, nil
+	return buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id]), nil
 }
 
 func (r *LegacyRuntime) QRCode(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {
@@ -313,12 +346,42 @@ func (r *LegacyRuntime) QRCode(ctx context.Context, instance *repository.Instanc
 		return nil, err
 	}
 
+	qrLock := r.qrLock(legacyInstance.Id)
+	qrLock.Lock()
+	defer qrLock.Unlock()
+
+	snapshot := buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id])
+	// If the session is already active, do not re-enter the legacy QR flow.
+	// Repeated /qrcode polling during an active session can contend with send/status work.
+	if snapshot.LoggedIn || (snapshot.Connected && strings.EqualFold(snapshot.Status, "open")) {
+		if snapshot.Status == "" || snapshot.Status == "close" {
+			snapshot.Status = "open"
+		}
+		snapshot.QRCode = ""
+		snapshot.PairingCode = ""
+		return snapshot, nil
+	}
+
+	// If a client exists in memory but the websocket is currently down, avoid
+	// hammering the legacy QR flow. There is no fresh QR to return yet.
+	if r.hasClientPointer(legacyInstance.Id) && !snapshot.Connected && snapshot.QRCode == "" {
+		snapshot.Status = "connecting"
+		snapshot.PairingCode = ""
+		return snapshot, nil
+	}
+
 	qr, err := r.legacySvc.GetQr(legacyInstance)
 	if err != nil {
+		if isQRCodePendingError(err) {
+			snapshot.Status = "connecting"
+			snapshot.QRCode = ""
+			snapshot.PairingCode = ""
+			return snapshot, nil
+		}
 		return nil, err
 	}
 
-	snapshot := buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id])
+	snapshot = buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id])
 	snapshot.QRCode = qr.Qrcode
 	snapshot.PairingCode = qr.Code
 	if snapshot.Status == "" || snapshot.Status == "close" {
@@ -530,8 +593,11 @@ func (r *LegacyRuntime) ensureReady() error {
 }
 
 func (r *LegacyRuntime) ensureConnectedClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
-	client := r.clientPointer[instance.Id]
-	if client != nil && client.IsConnected() {
+	if client, err := r.waitForActiveClient(instance.Id, 0); err == nil {
+		return client, nil
+	}
+
+	if client, err := r.reconnectExistingClient(instance); err == nil {
 		return client, nil
 	}
 
@@ -541,14 +607,186 @@ func (r *LegacyRuntime) ensureConnectedClient(instance *legacyInstanceModel.Inst
 		return nil, err
 	}
 
-	time.Sleep(2 * time.Second)
+	return r.waitForActiveClient(instance.Id, clientReadyTimeout)
+}
 
-	client = r.clientPointer[instance.Id]
-	if client == nil || !client.IsConnected() {
-		return nil, fmt.Errorf("no active session found")
+func (r *LegacyRuntime) refreshConnectedClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
+	client, err := r.waitForActiveClient(instance.Id, sendRetryDelay)
+	if err == nil {
+		return client, nil
 	}
 
-	return client, nil
+	if client, err = r.reconnectExistingClient(instance); err == nil {
+		return client, nil
+	}
+
+	if _, _, _, connectErr := r.legacySvc.Connect(&legacyInstanceService.ConnectStruct{
+		WebhookUrl: instance.Webhook,
+	}, instance); connectErr != nil {
+		if client, retryErr := r.waitForActiveClient(instance.Id, sendRetryDelay); retryErr == nil {
+			return client, nil
+		}
+		return nil, connectErr
+	}
+
+	return r.waitForActiveClient(instance.Id, clientReadyTimeout)
+}
+
+func (r *LegacyRuntime) reconnectExistingClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
+	client := r.clientPointer[instance.Id]
+	if client == nil {
+		return nil, fmt.Errorf("client not initialized")
+	}
+	if client.IsConnected() && client.IsLoggedIn() {
+		return client, nil
+	}
+
+	if err := r.legacySvc.Reconnect(instance); err != nil {
+		return nil, err
+	}
+
+	return r.waitForActiveClient(instance.Id, clientReadyTimeout)
+}
+
+func (r *LegacyRuntime) waitForActiveClient(instanceID string, timeout time.Duration) (*whatsmeow.Client, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		client := r.clientPointer[instanceID]
+		if client != nil && client.IsConnected() && client.IsLoggedIn() {
+			return client, nil
+		}
+		if timeout == 0 || time.Now().After(deadline) {
+			return nil, fmt.Errorf("no active session found")
+		}
+		time.Sleep(clientReadyPollInterval)
+	}
+}
+
+func (r *LegacyRuntime) resolveTextRecipient(client *whatsmeow.Client, instance *legacyInstanceModel.Instance, number string) (types.JID, error) {
+	formatJID := true
+	recipient, err := validateLegacyMessageRecipient(number, &formatJID)
+	if err != nil {
+		return types.NewJID("", types.DefaultUserServer), err
+	}
+
+	if r.legacyCfg == nil || !r.legacyCfg.CheckUserExists {
+		return recipient, nil
+	}
+
+	if strings.Contains(number, "@g.us") || strings.Contains(number, "@broadcast") || strings.Contains(number, "@newsletter") || strings.Contains(number, "@lid") {
+		return recipient, nil
+	}
+
+	remoteJID, found, err := r.checkTextRecipientOnWhatsApp(client, number, false)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("recipient verification failed; using parsed jid", "instance_id", instance.Id, "number", number, "error", err)
+		}
+		return recipient, nil
+	}
+	if !found {
+		remoteJID, found, err = r.checkTextRecipientOnWhatsApp(client, number, true)
+		if err != nil {
+			if r.logger != nil {
+				r.logger.Warn("recipient verification retry failed; using parsed jid", "instance_id", instance.Id, "number", number, "error", err)
+			}
+			return recipient, nil
+		}
+	}
+	if !found {
+		return types.NewJID("", types.DefaultUserServer), fmt.Errorf("number %s is not registered on WhatsApp", number)
+	}
+
+	formatJID = false
+	return validateLegacyMessageRecipient(remoteJID, &formatJID)
+}
+
+func validateLegacyMessageRecipient(phone string, formatJID *bool) (types.JID, error) {
+	shouldFormat := true
+	if formatJID != nil {
+		shouldFormat = *formatJID
+	}
+
+	finalPhone := phone
+	if shouldFormat {
+		rawNumber := phone
+		if strings.Contains(phone, "@s.whatsapp.net") {
+			rawNumber = strings.Split(phone, "@")[0]
+		}
+		normalizedJID, err := utils.CreateJID(rawNumber)
+		if err != nil {
+			recipient, ok := utils.ParseJID(phone)
+			if !ok {
+				return types.NewJID("", types.DefaultUserServer), fmt.Errorf("could not parse phone: %s", phone)
+			}
+			finalPhone = recipient.String()
+		} else {
+			finalPhone = normalizedJID
+		}
+	}
+
+	recipient, ok := utils.ParseJID(finalPhone)
+	if !ok {
+		return types.NewJID("", types.DefaultUserServer), errors.New("could not parse formatted phone")
+	}
+
+	return recipient, nil
+}
+
+func (r *LegacyRuntime) checkTextRecipientOnWhatsApp(client *whatsmeow.Client, phone string, formatJID bool) (string, bool, error) {
+	phoneNumbers, err := utils.PrepareNumbersForWhatsAppCheck([]string{phone}, &formatJID)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to prepare number for WhatsApp check: %w", err)
+	}
+
+	resp, err := client.IsOnWhatsApp(context.Background(), phoneNumbers)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to check if number %s exists on WhatsApp: %w", phoneNumbers[0], err)
+	}
+	if len(resp) == 0 {
+		return "", false, nil
+	}
+	if !resp[0].IsIn {
+		return "", false, nil
+	}
+
+	return resp[0].JID.String(), true, nil
+}
+
+func isTransientSendError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "failed to get device list") ||
+		strings.Contains(message, "failed to send usync query") ||
+		strings.Contains(message, "context canceled")
+}
+
+func isQRCodePendingError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no qr code available") ||
+		strings.Contains(message, "session already logged in")
+}
+
+func (r *LegacyRuntime) hasClientPointer(instanceID string) bool {
+	_, ok := r.clientPointer[instanceID]
+	return ok
+}
+
+func (r *LegacyRuntime) sendLock(instanceID string) *sync.Mutex {
+	lock, _ := r.sendLocks.LoadOrStore(instanceID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func (r *LegacyRuntime) qrLock(instanceID string) *sync.Mutex {
+	lock, _ := r.qrLocks.LoadOrStore(instanceID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 func isNilInterface(value any) bool {

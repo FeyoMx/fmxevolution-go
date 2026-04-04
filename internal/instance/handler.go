@@ -155,17 +155,64 @@ func (h *Handler) SendText(c *gin.Context) {
 		return
 	}
 
-	message, instance, err := h.service.SendText(c.Request.Context(), identity.TenantID, instanceReferenceFromParams(c), input)
+	jobID, instance, err := h.service.QueueSendText(c.Request.Context(), identity.TenantID, instanceReferenceFromParams(c), input)
 	if err != nil {
 		sharedhandler.WriteError(c, err)
 		return
 	}
 
 	payload := gin.H{
-		"message":      "success",
-		"instance_id":  "",
-		"instanceName": "",
-		"data":         message,
+		"message":            "message queued; delivery pending",
+		"queued":             true,
+		"accepted_only":      true,
+		"sent":               false,
+		"delivery_confirmed": false,
+		"delivery_status":    "queued",
+		"job_id":             jobID,
+		"number":             strings.TrimSpace(input.Number),
+		"text":               input.Text,
+		"instance_id":        "",
+		"instanceName":       "",
+	}
+	if instance != nil {
+		payload["instance_id"] = instance.ID
+		payload["instanceName"] = instance.Name
+		payload["engine_instance_id"] = instance.EngineInstanceID
+		payload["status_endpoint"] = "/instance/id/" + instance.ID + "/messages/text/" + jobID
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusAccepted, payload)
+}
+
+func (h *Handler) SendTextJobStatus(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+
+	job, instance, err := h.service.GetSendTextJob(c.Request.Context(), identity.TenantID, instanceReferenceFromParams(c), c.Param("jobID"))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	payload := gin.H{
+		"job_id":             job.JobID,
+		"status":             job.Status,
+		"delivery_status":    job.Status,
+		"sent":               job.Status == "sent",
+		"delivery_confirmed": false,
+		"number":             job.Number,
+		"text":               job.Text,
+		"queued_at":          job.QueuedAt,
+		"started_at":         job.StartedAt,
+		"finished_at":        job.FinishedAt,
+	}
+	if job.Error != "" {
+		payload["error"] = job.Error
+	}
+	if job.MessageID != "" {
+		payload["message_id"] = job.MessageID
+	}
+	if job.ServerID != 0 {
+		payload["server_id"] = job.ServerID
 	}
 	if instance != nil {
 		payload["instance_id"] = instance.ID

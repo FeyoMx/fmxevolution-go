@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 	legacyInstanceModel "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	legacyInstanceService "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
+	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -19,6 +21,7 @@ type Service struct {
 	runtime        Runtime
 	runtimeFactory func() (Runtime, error)
 	runtimeMu      sync.Mutex
+	sendTextJobs   sync.Map
 	logger         *slog.Logger
 }
 
@@ -32,6 +35,22 @@ type SendTextInput struct {
 	Number string `json:"number"`
 	Text   string `json:"text"`
 	Delay  int32  `json:"delay"`
+}
+
+type SendTextJobStatus struct {
+	JobID        string     `json:"job_id"`
+	InstanceID   string     `json:"instance_id"`
+	InstanceName string     `json:"instanceName"`
+	Reference    string     `json:"reference"`
+	Number       string     `json:"number"`
+	Text         string     `json:"text"`
+	Status       string     `json:"status"`
+	Error        string     `json:"error,omitempty"`
+	MessageID    string     `json:"message_id,omitempty"`
+	ServerID     int64      `json:"server_id,omitempty"`
+	QueuedAt     time.Time  `json:"queued_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 }
 
 func NewService(repo repository.InstanceRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
@@ -445,10 +464,158 @@ func (s *Service) SendText(ctx context.Context, tenantID, reference string, inpu
 
 	message, err := legacyRuntime.SendText(ctx, instance, strings.TrimSpace(input.Number), input.Text)
 	if err != nil {
+		if s.logger != nil {
+			s.logger.Error(
+				"send text failed",
+				"instance_id", instance.ID,
+				"reference", reference,
+				"number", strings.TrimSpace(input.Number),
+				"error", err,
+			)
+		}
 		return nil, instance, err
 	}
 
 	return message, instance, nil
+}
+
+func (s *Service) QueueSendText(ctx context.Context, tenantID, reference string, input SendTextInput) (string, *repository.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return "", nil, err
+	}
+
+	input.Number = strings.TrimSpace(input.Number)
+	input.Text = strings.TrimSpace(input.Text)
+	if input.Number == "" || input.Text == "" {
+		return "", instance, fmt.Errorf("%w: number and text are required", domain.ErrValidation)
+	}
+
+	jobID := uuid.NewString()
+	queuedAt := time.Now().UTC()
+	s.storeSendTextJob(tenantID, SendTextJobStatus{
+		JobID:        jobID,
+		InstanceID:   instance.ID,
+		InstanceName: instance.Name,
+		Reference:    reference,
+		Number:       input.Number,
+		Text:         input.Text,
+		Status:       "queued",
+		QueuedAt:     queuedAt,
+	})
+
+	go func(instance *repository.Instance, queuedInput SendTextInput, queuedJobID string) {
+		startedAt := time.Now().UTC()
+		s.storeSendTextJob(tenantID, SendTextJobStatus{
+			JobID:        queuedJobID,
+			InstanceID:   instance.ID,
+			InstanceName: instance.Name,
+			Reference:    instance.ID,
+			Number:       queuedInput.Number,
+			Text:         queuedInput.Text,
+			Status:       "running",
+			QueuedAt:     queuedAt,
+			StartedAt:    &startedAt,
+		})
+
+		sendCtx := context.Background()
+		message, _, sendErr := s.SendText(sendCtx, tenantID, instance.ID, queuedInput)
+		finishedAt := time.Now().UTC()
+		if s.logger == nil {
+			if sendErr != nil {
+				s.storeSendTextJob(tenantID, SendTextJobStatus{
+					JobID:        queuedJobID,
+					InstanceID:   instance.ID,
+					InstanceName: instance.Name,
+					Reference:    instance.ID,
+					Number:       queuedInput.Number,
+					Text:         queuedInput.Text,
+					Status:       "failed",
+					Error:        sendErr.Error(),
+					QueuedAt:     queuedAt,
+					StartedAt:    &startedAt,
+					FinishedAt:   &finishedAt,
+				})
+				return
+			}
+			s.storeSendTextJob(tenantID, SendTextJobStatus{
+				JobID:        queuedJobID,
+				InstanceID:   instance.ID,
+				InstanceName: instance.Name,
+				Reference:    instance.ID,
+				Number:       queuedInput.Number,
+				Text:         queuedInput.Text,
+				Status:       "sent",
+				MessageID:    message.MessageID,
+				ServerID:     message.ServerID,
+				QueuedAt:     queuedAt,
+				StartedAt:    &startedAt,
+				FinishedAt:   &finishedAt,
+			})
+			return
+		}
+		if sendErr != nil {
+			s.storeSendTextJob(tenantID, SendTextJobStatus{
+				JobID:        queuedJobID,
+				InstanceID:   instance.ID,
+				InstanceName: instance.Name,
+				Reference:    instance.ID,
+				Number:       queuedInput.Number,
+				Text:         queuedInput.Text,
+				Status:       "failed",
+				Error:        sendErr.Error(),
+				QueuedAt:     queuedAt,
+				StartedAt:    &startedAt,
+				FinishedAt:   &finishedAt,
+			})
+			s.logger.Error(
+				"queued send text failed",
+				"job_id", queuedJobID,
+				"instance_id", instance.ID,
+				"number", queuedInput.Number,
+				"error", sendErr,
+			)
+			return
+		}
+		s.storeSendTextJob(tenantID, SendTextJobStatus{
+			JobID:        queuedJobID,
+			InstanceID:   instance.ID,
+			InstanceName: instance.Name,
+			Reference:    instance.ID,
+			Number:       queuedInput.Number,
+			Text:         queuedInput.Text,
+			Status:       "sent",
+			MessageID:    message.MessageID,
+			ServerID:     message.ServerID,
+			QueuedAt:     queuedAt,
+			StartedAt:    &startedAt,
+			FinishedAt:   &finishedAt,
+		})
+		s.logger.Info(
+			"queued send text completed",
+			"job_id", queuedJobID,
+			"instance_id", instance.ID,
+			"number", queuedInput.Number,
+			"message_id", message.MessageID,
+			"server_id", message.ServerID,
+		)
+	}(instance, input, jobID)
+
+	return jobID, instance, nil
+}
+
+func (s *Service) GetSendTextJob(ctx context.Context, tenantID, reference, jobID string) (*SendTextJobStatus, *repository.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	status, ok := s.loadSendTextJob(tenantID, jobID)
+	if !ok || status.InstanceID != instance.ID {
+		return nil, instance, fmt.Errorf("%w: send job not found", domain.ErrNotFound)
+	}
+
+	return &status, instance, nil
 }
 
 func (s *Service) GetWebsocketConfig(ctx context.Context, tenantID, reference string) (*EventConnectorConfig, *repository.Instance, error) {
@@ -828,4 +995,30 @@ func (s *Service) ensureRuntime() (Runtime, error) {
 
 	s.runtime = runtime
 	return s.runtime, nil
+}
+
+type sendTextJobRecord struct {
+	tenantID string
+	status   SendTextJobStatus
+}
+
+func (s *Service) storeSendTextJob(tenantID string, status SendTextJobStatus) {
+	s.sendTextJobs.Store(status.JobID, sendTextJobRecord{
+		tenantID: tenantID,
+		status:   status,
+	})
+}
+
+func (s *Service) loadSendTextJob(tenantID, jobID string) (SendTextJobStatus, bool) {
+	value, ok := s.sendTextJobs.Load(jobID)
+	if !ok {
+		return SendTextJobStatus{}, false
+	}
+
+	record, ok := value.(sendTextJobRecord)
+	if !ok || record.tenantID != tenantID {
+		return SendTextJobStatus{}, false
+	}
+
+	return record.status, true
 }
