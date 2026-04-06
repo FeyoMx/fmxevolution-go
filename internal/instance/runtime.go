@@ -73,6 +73,9 @@ type RuntimeSnapshot struct {
 type Runtime interface {
 	Connect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	Disconnect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
+	Reconnect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
+	Logout(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
+	Pair(ctx context.Context, instance *repository.Instance, phone string) (*RuntimeSnapshot, error)
 	Snapshot(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	QRCode(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 }
@@ -493,6 +496,101 @@ func (r *LegacyRuntime) Disconnect(ctx context.Context, instance *repository.Ins
 	return r.Snapshot(ctx, instance)
 }
 
+func (r *LegacyRuntime) Reconnect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := r.whatsmeowSvc.ReconnectClient(legacyInstance.Id); err != nil {
+		return nil, err
+	}
+
+	snapshot, err := r.Snapshot(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot.Status == "" || snapshot.Status == "close" {
+		snapshot.Status = "connecting"
+	}
+	return snapshot, nil
+}
+
+func (r *LegacyRuntime) Logout(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := r.legacySvc.Logout(legacyInstance); err != nil {
+		return nil, err
+	}
+
+	snapshot, err := r.Snapshot(ctx, instance)
+	if err != nil {
+		snapshot = buildRuntimeSnapshot(legacyInstance, nil)
+	}
+	snapshot.Connected = false
+	snapshot.LoggedIn = false
+	snapshot.QRCode = ""
+	snapshot.PairingCode = ""
+	snapshot.Status = "close"
+	return snapshot, nil
+}
+
+func (r *LegacyRuntime) Pair(ctx context.Context, instance *repository.Instance, phone string) (*RuntimeSnapshot, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return nil, fmt.Errorf("%w: phone is required", domain.ErrValidation)
+	}
+
+	client := r.clientPointer[legacyInstance.Id]
+	if client != nil && client.IsLoggedIn() {
+		return nil, fmt.Errorf("%w: pairing is only available while the runtime is awaiting login", domain.ErrConflict)
+	}
+
+	if client == nil || !client.IsConnected() {
+		if _, _, _, err := r.legacySvc.Connect(&legacyInstanceService.ConnectStruct{
+			WebhookUrl: legacyInstance.Webhook,
+		}, legacyInstance); err != nil {
+			return nil, err
+		}
+		client, err = r.waitForPairingClient(legacyInstance.Id, clientReadyTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	code, err := client.PairPhone(context.Background(), phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot := buildRuntimeSnapshot(legacyInstance, client)
+	snapshot.PairingCode = code
+	if snapshot.Status == "" || snapshot.Status == "close" {
+		snapshot.Status = "connecting"
+	}
+	return snapshot, nil
+}
+
 func (r *LegacyRuntime) Snapshot(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {
 	if err := r.ensureReady(); err != nil {
 		return nil, err
@@ -861,6 +959,20 @@ func (r *LegacyRuntime) waitForActiveClient(instanceID string, timeout time.Dura
 		}
 		if timeout == 0 || time.Now().After(deadline) {
 			return nil, fmt.Errorf("no active session found")
+		}
+		time.Sleep(clientReadyPollInterval)
+	}
+}
+
+func (r *LegacyRuntime) waitForPairingClient(instanceID string, timeout time.Duration) (*whatsmeow.Client, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		client := r.clientPointer[instanceID]
+		if client != nil && client.IsConnected() && !client.IsLoggedIn() {
+			return client, nil
+		}
+		if timeout == 0 || time.Now().After(deadline) {
+			return nil, fmt.Errorf("%w: runtime did not become ready for pairing", domain.ErrTimeout)
 		}
 		time.Sleep(clientReadyPollInterval)
 	}

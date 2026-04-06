@@ -22,9 +22,11 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 ### Runtime bridge and instance lifecycle
 
 - tenant-scoped instance CRUD
-- connect, disconnect, status, and QR flows through the legacy runtime bridge
+- connect, disconnect, reconnect, pair, logout, status, and QR flows through the legacy runtime bridge
 - advanced settings bridge
 - webhook sync and compatibility response shaping
+- runtime admin actions return compatibility envelopes with refreshed status fields so the frontend can use the action response as an immediate operational refresh
+- SaaS runtime admin parity is mounted only on tenant-scoped `/instance/:id` and `/instance/id/:instanceID` routes; unsafe legacy global handlers remain unexposed
 
 ### Messaging work completed in this branch
 
@@ -71,6 +73,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - Chatwoot, SQS, and manager-style integration suites remain explicit `501 partial`
 - dashboard metrics still include placeholders
 - runtime parity still depends heavily on the legacy bridge
+- logout truthfulness is limited by the live bridge: if there is no active logged-in runtime session, the backend now returns an explicit error instead of faking success
 
 ## Files changed in this wave
 

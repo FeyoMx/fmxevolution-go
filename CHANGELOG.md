@@ -49,6 +49,13 @@
 - Added live runtime-backed chat list support on:
   - `/instance/:id/chats/search`
   - `/chat/findChats/:instanceName`
+- Added tenant-safe runtime admin routes for:
+  - `/instance/:id/reconnect`
+  - `/instance/:id/pair`
+  - `/instance/:id/logout`
+  - plus `/instance/id/:instanceID/*` aliases
+- Added compatibility-envelope runtime action responses so reconnect/pair/logout can double as frontend status refresh payloads
+- Kept logout honest to bridge guarantees by returning an error when no active logged-in runtime session exists instead of faking deeper parity
 
 ### Configuration and examples
 

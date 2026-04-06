@@ -38,6 +38,10 @@ type SendTextInput struct {
 	Delay  int32  `json:"delay"`
 }
 
+type PairInput struct {
+	Phone string `json:"phone"`
+}
+
 type SendMediaOutput = SendMediaResult
 
 type SendTextJobStatus = sendstatus.JobStatus
@@ -216,6 +220,122 @@ func (s *Service) DisconnectByID(ctx context.Context, tenantID, instanceID strin
 	return instance, nil
 }
 
+func (s *Service) Reconnect(ctx context.Context, tenantID, reference string) (*repository.Instance, *RuntimeSnapshot, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, nil, ensureErr
+		}
+		return instance, nil, fmt.Errorf("runtime unavailable")
+	}
+
+	snapshot, runtimeErr := runtime.Reconnect(ctx, instance)
+	if runtimeErr != nil {
+		if s.logger != nil {
+			s.logger.Error("reconnect legacy runtime failed", "instance_id", instance.ID, "reference", reference, "error", runtimeErr)
+		}
+		return instance, nil, runtimeErr
+	}
+
+	instance, err = s.applySnapshot(ctx, instance, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return instance, snapshot, nil
+}
+
+func (s *Service) ReconnectByID(ctx context.Context, tenantID, instanceID string) (*repository.Instance, *RuntimeSnapshot, error) {
+	instance, err := s.Get(ctx, tenantID, instanceID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, nil, ensureErr
+		}
+		return instance, nil, fmt.Errorf("runtime unavailable")
+	}
+
+	snapshot, runtimeErr := runtime.Reconnect(ctx, instance)
+	if runtimeErr != nil {
+		if s.logger != nil {
+			s.logger.Error("reconnect legacy runtime failed", "instance_id", instance.ID, "error", runtimeErr)
+		}
+		return instance, nil, runtimeErr
+	}
+
+	instance, err = s.applySnapshot(ctx, instance, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return instance, snapshot, nil
+}
+
+func (s *Service) Logout(ctx context.Context, tenantID, reference string) (*repository.Instance, *RuntimeSnapshot, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, nil, ensureErr
+		}
+		return instance, nil, fmt.Errorf("runtime unavailable")
+	}
+
+	snapshot, runtimeErr := runtime.Logout(ctx, instance)
+	if runtimeErr != nil {
+		if s.logger != nil {
+			s.logger.Error("logout legacy runtime failed", "instance_id", instance.ID, "reference", reference, "error", runtimeErr)
+		}
+		return instance, nil, runtimeErr
+	}
+
+	instance, err = s.applySnapshot(ctx, instance, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return instance, snapshot, nil
+}
+
+func (s *Service) LogoutByID(ctx context.Context, tenantID, instanceID string) (*repository.Instance, *RuntimeSnapshot, error) {
+	instance, err := s.Get(ctx, tenantID, instanceID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, nil, ensureErr
+		}
+		return instance, nil, fmt.Errorf("runtime unavailable")
+	}
+
+	snapshot, runtimeErr := runtime.Logout(ctx, instance)
+	if runtimeErr != nil {
+		if s.logger != nil {
+			s.logger.Error("logout legacy runtime failed", "instance_id", instance.ID, "error", runtimeErr)
+		}
+		return instance, nil, runtimeErr
+	}
+
+	instance, err = s.applySnapshot(ctx, instance, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return instance, snapshot, nil
+}
+
 func (s *Service) Status(ctx context.Context, tenantID, reference string) (*repository.Instance, error) {
 	instance, err := s.resolve(ctx, tenantID, reference)
 	if err != nil {
@@ -278,6 +398,64 @@ func (s *Service) QRCode(ctx context.Context, tenantID, reference string) (*repo
 		return nil, nil, err
 	}
 
+	return instance, snapshot, nil
+}
+
+func (s *Service) Pair(ctx context.Context, tenantID, reference string, input PairInput) (*repository.Instance, *RuntimeSnapshot, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, nil, ensureErr
+		}
+		return instance, nil, fmt.Errorf("runtime unavailable")
+	}
+
+	snapshot, runtimeErr := runtime.Pair(ctx, instance, strings.TrimSpace(input.Phone))
+	if runtimeErr != nil {
+		if s.logger != nil {
+			s.logger.Error("pair legacy runtime failed", "instance_id", instance.ID, "reference", reference, "error", runtimeErr)
+		}
+		return instance, nil, runtimeErr
+	}
+
+	instance, err = s.applySnapshot(ctx, instance, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return instance, snapshot, nil
+}
+
+func (s *Service) PairByID(ctx context.Context, tenantID, instanceID string, input PairInput) (*repository.Instance, *RuntimeSnapshot, error) {
+	instance, err := s.Get(ctx, tenantID, instanceID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, nil, ensureErr
+		}
+		return instance, nil, fmt.Errorf("runtime unavailable")
+	}
+
+	snapshot, runtimeErr := runtime.Pair(ctx, instance, strings.TrimSpace(input.Phone))
+	if runtimeErr != nil {
+		if s.logger != nil {
+			s.logger.Error("pair legacy runtime failed", "instance_id", instance.ID, "error", runtimeErr)
+		}
+		return instance, nil, runtimeErr
+	}
+
+	instance, err = s.applySnapshot(ctx, instance, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
 	return instance, snapshot, nil
 }
 

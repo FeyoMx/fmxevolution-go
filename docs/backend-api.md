@@ -138,7 +138,7 @@ Instance detail payload can include:
 }
 ```
 
-### Connect / disconnect
+### Connect / disconnect / runtime admin
 
 | Method | Path | Roles | Request body | Success response | Tenant scope |
 |---|---|---|---|---|---|
@@ -146,6 +146,19 @@ Instance detail payload can include:
 | `POST` | `/instance/id/:instanceID/connect` | owner, admin | none | same as above | current tenant only |
 | `POST` | `/instance/:id/disconnect` | owner, admin | none | `{ message, instance_id, instanceName, status }` | current tenant only |
 | `POST` | `/instance/id/:instanceID/disconnect` | owner, admin | none | same as above | current tenant only |
+| `POST` | `/instance/:id/reconnect` | owner, admin | none | compatibility envelope with `{ instance_id, instanceName, engine_instance_id, status, connected, accepted, action: "reconnect" }` | current tenant only |
+| `POST` | `/instance/id/:instanceID/reconnect` | owner, admin | none | same as above | current tenant only |
+| `POST` | `/instance/:id/pair` | owner, admin | `{ phone }` or `{ number }` | compatibility envelope with `{ instance_id, instanceName, engine_instance_id, status, connected, accepted, action: "pair", code, pairingCode }` | current tenant only |
+| `POST` | `/instance/id/:instanceID/pair` | owner, admin | same as above | same as above | current tenant only |
+| `DELETE` | `/instance/:id/logout` | owner, admin | none | compatibility envelope with `{ instance_id, instanceName, engine_instance_id, status, connected, accepted, action: "logout", loggedOut }` | current tenant only |
+| `DELETE` | `/instance/id/:instanceID/logout` | owner, admin | none | same as above | current tenant only |
+
+Runtime admin notes:
+
+- `reconnect`, `pair`, and `logout` are mounted only on tenant-scoped SaaS routes; the backend does not expose the unsafe legacy global handlers.
+- `pair` accepts either `phone` or `number` and returns the pairing code in both `code` and `pairingCode`.
+- `logout` is intentionally honest about bridge limits: it requires an active logged-in runtime session and returns an error instead of pretending to clear a session that the bridge cannot prove exists.
+- these action responses reuse the same top-level-plus-`data` compatibility envelope as `status`/`qr`, so the frontend can refresh operational state from the action response without an immediate second request.
 
 ### Status and QR
 

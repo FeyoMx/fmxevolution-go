@@ -3,6 +3,7 @@ package instance
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -348,6 +349,64 @@ func (h *Handler) DisconnectByID(c *gin.Context) {
 	})
 }
 
+func (h *Handler) Reconnect(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, snapshot, err := h.service.Reconnect(c.Request.Context(), identity.TenantID, c.Param("id"))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	h.writeRuntimeActionEnvelope(c, http.StatusOK, "instance reconnect queued", instance, snapshot, gin.H{
+		"accepted": true,
+		"action":   "reconnect",
+	})
+}
+
+func (h *Handler) ReconnectByID(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, snapshot, err := h.service.ReconnectByID(c.Request.Context(), identity.TenantID, c.Param("instanceID"))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	h.writeRuntimeActionEnvelope(c, http.StatusOK, "instance reconnect queued", instance, snapshot, gin.H{
+		"accepted": true,
+		"action":   "reconnect",
+	})
+}
+
+func (h *Handler) Logout(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, snapshot, err := h.service.Logout(c.Request.Context(), identity.TenantID, c.Param("id"))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	h.writeRuntimeActionEnvelope(c, http.StatusOK, "instance logged out", instance, snapshot, gin.H{
+		"accepted":  true,
+		"action":    "logout",
+		"loggedOut": true,
+	})
+}
+
+func (h *Handler) LogoutByID(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, snapshot, err := h.service.LogoutByID(c.Request.Context(), identity.TenantID, c.Param("instanceID"))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	h.writeRuntimeActionEnvelope(c, http.StatusOK, "instance logged out", instance, snapshot, gin.H{
+		"accepted":  true,
+		"action":    "logout",
+		"loggedOut": true,
+	})
+}
+
 func (h *Handler) Status(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	instance, err := h.service.Status(c.Request.Context(), identity.TenantID, c.Param("id"))
@@ -392,6 +451,56 @@ func (h *Handler) QRCodeByID(c *gin.Context) {
 	h.writeNormalizedQRCode(c, http.StatusOK, instance, snapshot, "")
 }
 
+func (h *Handler) Pair(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	input, err := decodePairInput(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   err.Error(),
+			"message": "payload inválido para pairing",
+		})
+		return
+	}
+
+	instance, snapshot, err := h.service.Pair(c.Request.Context(), identity.TenantID, c.Param("id"), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	h.writeRuntimeActionEnvelope(c, http.StatusOK, "pairing code generated", instance, snapshot, gin.H{
+		"accepted":    true,
+		"action":      "pair",
+		"code":        snapshot.PairingCode,
+		"pairingCode": snapshot.PairingCode,
+	})
+}
+
+func (h *Handler) PairByID(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	input, err := decodePairInput(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   err.Error(),
+			"message": "payload inválido para pairing",
+		})
+		return
+	}
+
+	instance, snapshot, err := h.service.PairByID(c.Request.Context(), identity.TenantID, c.Param("instanceID"), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	h.writeRuntimeActionEnvelope(c, http.StatusOK, "pairing code generated", instance, snapshot, gin.H{
+		"accepted":    true,
+		"action":      "pair",
+		"code":        snapshot.PairingCode,
+		"pairingCode": snapshot.PairingCode,
+	})
+}
+
 func decodeCreateInput(c *gin.Context) (CreateInput, error) {
 	input := CreateInput{
 		Name:             c.PostForm("name"),
@@ -429,6 +538,35 @@ func decodeCreateInput(c *gin.Context) (CreateInput, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.EngineInstanceID = strings.TrimSpace(input.EngineInstanceID)
 	input.WebhookURL = strings.TrimSpace(input.WebhookURL)
+	return input, nil
+}
+
+func decodePairInput(c *gin.Context) (PairInput, error) {
+	input := PairInput{
+		Phone: c.PostForm("phone"),
+	}
+	if strings.TrimSpace(input.Phone) == "" {
+		input.Phone = c.PostForm("number")
+	}
+
+	rawBody, err := readRequestBody(c)
+	if err != nil {
+		return PairInput{}, err
+	}
+	if len(rawBody) > 0 {
+		var payload map[string]any
+		if err := json.Unmarshal(rawBody, &payload); err == nil {
+			if value := firstStringValue(payload, "phone", "number"); strings.TrimSpace(value) != "" {
+				input.Phone = value
+			}
+		}
+	}
+
+	input.Phone = strings.TrimSpace(input.Phone)
+	if input.Phone == "" {
+		return PairInput{}, fmt.Errorf("%w: phone is required", domain.ErrValidation)
+	}
+
 	return input, nil
 }
 
@@ -475,6 +613,20 @@ func mergeCreatePayload(input *CreateInput, payload map[string]any) {
 	setStringIfEmpty(&input.Name, "name", "instanceName", "instance")
 	setStringIfEmpty(&input.EngineInstanceID, "engine_instance_id", "engineInstanceId", "integration", "provider")
 	setStringIfEmpty(&input.WebhookURL, "webhook_url", "webhookUrl", "webhook")
+}
+
+func firstStringValue(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func (h *Handler) writeQRCodeFallback(c *gin.Context, tenantID, reference string, err error) {
@@ -533,6 +685,15 @@ func (h *Handler) writeNormalizedQRCode(c *gin.Context, statusCode int, instance
 		payload["pending_reason"] = strings.TrimSpace(pendingReason)
 	}
 	writeLegacyCompatibleEnvelope(c, statusCode, "success", payload)
+}
+
+func (h *Handler) writeRuntimeActionEnvelope(c *gin.Context, statusCode int, message string, instance *repository.Instance, snapshot *RuntimeSnapshot, extras gin.H) {
+	payload := buildStatusPayload(instance)
+	enrichPayloadWithSnapshot(payload, snapshot)
+	for key, value := range extras {
+		payload[key] = value
+	}
+	writeLegacyCompatibleEnvelope(c, statusCode, message, payload)
 }
 
 func buildStatusPayload(instance *repository.Instance) gin.H {

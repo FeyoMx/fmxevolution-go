@@ -1,6 +1,6 @@
 # Backend Product Readiness
 
-Audited on 2026-04-05.
+Audited on 2026-04-06.
 
 This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, webhook dispatch, CRM, text sending, media sending, audio sending, a live chat list, and tenant-safe message-history search. It is not yet full Evolution Go / Manager parity because several manager integration pages, some runtime/admin surfaces, and full upstream chat-history replay remain partial or unsupported.
 
@@ -11,7 +11,7 @@ Current backend maturity: usable, with explicit partials.
 Strong areas:
 
 - tenant auth, JWT, API key, and legacy instance-token compatibility
-- tenant-scoped instance CRUD, connect, disconnect, QR, status, and advanced settings
+- tenant-scoped instance CRUD, connect, disconnect, reconnect, pair, logout, QR, status, and advanced settings
 - text sending with async delivery tracking
 - media and audio sending through the legacy runtime bridge
 - webhook management and tenant-safe dispatch
@@ -88,6 +88,12 @@ Implemented routes:
 - `POST /instance/id/:instanceID/connect`
 - `POST /instance/:id/disconnect`
 - `POST /instance/id/:instanceID/disconnect`
+- `POST /instance/:id/reconnect`
+- `POST /instance/id/:instanceID/reconnect`
+- `POST /instance/:id/pair`
+- `POST /instance/id/:instanceID/pair`
+- `DELETE /instance/:id/logout`
+- `DELETE /instance/id/:instanceID/logout`
 - `GET /instance/:id/status`
 - `GET /instance/id/:instanceID/status`
 - `GET /instance/:id/qr`
@@ -102,9 +108,11 @@ Implemented routes:
 Readiness notes:
 
 - Tenant-scoped instance CRUD is implemented.
-- Connect, disconnect, QR, and status are implemented through the legacy runtime bridge.
+- Connect, disconnect, reconnect, pair, logout, QR, and status are implemented through the legacy runtime bridge.
 - Advanced settings are implemented through the legacy bridge.
 - Response shaping keeps older frontend consumers working.
+- Runtime admin actions stay tenant-safe because the SaaS layer resolves the instance inside the authenticated tenant before invoking the bridge.
+- Logout remains intentionally stricter than legacy-global behavior: the bridge only reports success when there is an active logged-in runtime session to terminate.
 
 ### Messaging
 
@@ -277,8 +285,6 @@ These routes are intentionally mounted and still return structured `501 partial`
 
 These capabilities are still missing from the active SaaS surface even though they exist upstream or in legacy manager expectations:
 
-- explicit pair route parity (`/instance/pair` style flow)
-- reconnect/logout runtime admin routes on the SaaS surface
 - Kafka connector parity
 - tenant-safe Chatwoot storage and runtime wiring
 - tenant-safe CRUD for OpenAI, Typebot, Dify, N8N, EvoAI, EvolutionBot, and Flowise
@@ -298,7 +304,7 @@ These capabilities are still missing from the active SaaS surface even though th
 ## Next Recommended Backend Priorities
 
 1. Add durable inbound/backfill parity so message history is not limited to events seen by the current SaaS process.
-2. Add runtime parity for reconnect/logout/pairing flows needed by manager-level lifecycle UX.
+2. Add durable runtime session observability so reconnect/logout/pair UX can report richer state without relying entirely on the live legacy bridge.
 3. Decide which manager integration suites are true product priorities and implement only those with tenant-safe repositories.
 4. Replace placeholder dashboard metrics with real aggregates or label them partial in UI.
 5. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.
