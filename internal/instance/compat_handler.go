@@ -110,10 +110,23 @@ func (h *Handler) LegacyFindChats(c *gin.Context) {
 }
 
 func (h *Handler) LegacyFindMessages(c *gin.Context) {
-	h.writePartialFeature(c, "chat", []string{
-		"tenant-safe message history search is still unavailable",
-		"the backend does not persist the legacy Message[] conversation history contract",
-	})
+	var input MessageSearchRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   err.Error(),
+			"message": "invalid legacy message search payload",
+		})
+		return
+	}
+
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	messages, _, err := h.service.SearchMessages(c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, messages)
 }
 
 func buildLegacySendResponse(message string, instance *repository.Instance, result any) gin.H {

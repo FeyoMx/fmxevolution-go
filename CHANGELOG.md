@@ -37,6 +37,11 @@
 - Added safer media-storage fallback behavior when MinIO is enabled but runtime storage is not initialized
 - Added stable text delivery tracking with queued job status plus delivered/read receipt updates
 - Added tenant-safe media and audio send routes on `/instance/:id/messages/media` and `/instance/:id/messages/audio`
+- Added a tenant-safe `ConversationMessage` history model for chat search parity
+- Added message-history search on:
+  - `/instance/:id/messages/search`
+  - `/chat/findMessages/:instanceName`
+- Added bridge callbacks to persist inbound runtime messages and delivery/read receipts into the SaaS history model
 - Added legacy compatibility send routes for the current frontend:
   - `/message/sendText/:instanceName`
   - `/message/sendMedia/:instanceName`
@@ -59,6 +64,4 @@
 - The SaaS API still depends on the legacy engine for QR, connection lifecycle, and advanced instance settings
 - Added `docs/backend-product-readiness.md` as a practical backend readiness snapshot
 - Added `docs/backend-parity-report.md` and `docs/backend-parity-plan.md` for phased parity work
-- Message-history search is still explicit partial support on:
-  - `/instance/:id/messages/search`
-  - `/chat/findMessages/:instanceName`
+- Message-history parity is now usable, but inbound completeness is still partial because there is no backfill from older sessions or full upstream replay into the SaaS read model

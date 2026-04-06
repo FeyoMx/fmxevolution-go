@@ -203,14 +203,16 @@ These routes were added from the frontend instance/integration gap report withou
 | `GET` | `/instance/:id/messages/text/:jobID` | owner, admin, agent | none | text-job status with `status`, `delivery_status`, `sent`, `delivery_confirmed`, timestamps, `error?`, `message_id?` | implemented |
 | `GET` | `/instance/id/:instanceID/messages/text/:jobID` | owner, admin, agent | none | same as above | implemented |
 | `POST` | `/instance/:id/chats/search` | owner, admin, agent | `{ where? }` | `Chat[]` compatibility list sourced from live contacts/groups | implemented |
-| `POST` | `/instance/:id/messages/search` | owner, admin, agent | legacy-compatible search payload | `501` partial response | partial |
+| `POST` | `/instance/:id/messages/search` | owner, admin, agent | legacy-compatible search payload with `where.key.remoteJid`, optional `limit`, `cursor`, `where.query`, `where.key.id` | `Message[]` chronological history response | implemented |
 | `POST` | `/instance/:id/messages/media` | owner, admin, agent | media JSON payload, accepts either flat fields or nested `mediaMessage` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
 | `POST` | `/instance/:id/messages/audio` | owner, admin, agent | audio JSON payload, accepts either root `audio` or nested `audioMessage.audio` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
 
 Notes:
 
 - `chats/search` is now functional, but it is a live runtime-backed list of contacts and groups, not a full persisted chat-history model.
-- `messages/search` stays explicit `501 partial` because the backend still has no tenant-safe message-history repository.
+- `messages/search` is now backed by a tenant-safe `ConversationMessage` read model in the SaaS database.
+- Current persistence is strongest for outbound text/media/audio sends.
+- Inbound messages are captured from the active runtime bridge when those events reach the current process, but there is no historical backfill or full upstream replay yet.
 - media/audio support is currently scoped to the JSON shapes used by the current frontend.
 
 #### Event connectors and proxy
@@ -280,7 +282,7 @@ These routes were added because the current sibling frontend still calls manager
 | Method | Path | Roles | Request body | Success response | Status |
 |---|---|---|---|---|---|
 | `POST` | `/chat/findChats/:instanceName` | owner, admin, agent | `{ where? }` | same runtime-backed `Chat[]` list as SaaS chat search | implemented |
-| `POST` | `/chat/findMessages/:instanceName` | owner, admin, agent | legacy-compatible message search payload | `501` partial response | partial |
+| `POST` | `/chat/findMessages/:instanceName` | owner, admin, agent | legacy-compatible message search payload | same `Message[]` history response as SaaS route | implemented |
 | `POST` | `/message/sendText/:instanceName` | owner, admin, agent | `{ number, text, options? }` | legacy-style `{ message, data }` success response | implemented |
 | `POST` | `/message/sendMedia/:instanceName` | owner, admin, agent | legacy-compatible media JSON payload | legacy-style `{ message, data }` success response | implemented |
 | `POST` | `/message/sendWhatsAppAudio/:instanceName` | owner, admin, agent | legacy-compatible audio JSON payload | legacy-style `{ message, data }` success response | implemented |
@@ -399,11 +401,6 @@ These routes are **not** registered in `cmd/api` and should be treated as stale 
 
 - `/n8n/find/:instanceName`
 - `/n8n/fetchSettings/:instanceName`
-- `/chat/findChats/:instanceName`
-- `/chat/findMessages/:instanceName`
-- `/message/sendText/:instanceName`
-- `/message/sendMedia/:instanceName`
-- `/message/sendWhatsAppAudio/:instanceName`
 - `/websocket/find/:instanceName`
 - `/websocket/set/:instanceName`
 - `/rabbitmq/find/:instanceName`
@@ -416,4 +413,12 @@ These routes are **not** registered in `cmd/api` and should be treated as stale 
 - `/chatwoot/set/:instanceName`
 - older manager-oriented route sets documented in `docs/swagger.*`
 
-For the SaaS layer, `internal/server/server.go` is the source of truth.
+Notes:
+
+- The following compatibility chat routes are now registered and supported:
+  - `/chat/findChats/:instanceName`
+  - `/chat/findMessages/:instanceName`
+  - `/message/sendText/:instanceName`
+  - `/message/sendMedia/:instanceName`
+  - `/message/sendWhatsAppAudio/:instanceName`
+- For the SaaS layer, `internal/server/server.go` is the source of truth.

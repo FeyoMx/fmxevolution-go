@@ -21,12 +21,13 @@ The backend now has practical parity for:
 - media sending
 - audio sending
 - live chat listing
+- tenant-safe message-history search
 - webhook management
 - websocket and rabbitmq instance config
 
 The biggest remaining parity gaps are:
 
-- full message-history search
+- durable inbound/backfill message-history parity
 - Chatwoot and manager-style bot/integration suites
 - SQS/Kafka parity
 - richer runtime admin surfaces like pair/reconnect/logout parity
@@ -42,7 +43,7 @@ The biggest remaining parity gaps are:
 | Media messaging | manager send media and instance send media | implemented via the legacy runtime bridge and SaaS/legacy compatibility routes | embed chat / manager chat composer | partial match |
 | Audio messaging | WhatsApp audio / PTT send | implemented via the legacy runtime bridge and SaaS/legacy compatibility routes | embed chat / manager chat composer | partial match |
 | Chat list | manager chat list | live runtime-backed contacts/groups list implemented | embed chat / manager chat list | partial match |
-| Message history / search | manager chat message history | no tenant-safe persisted `Message[]` read model; routes remain explicit partials | chat conversation pages | unsupported |
+| Message history / search | manager chat message history | tenant-safe `ConversationMessage` read model now serves both SaaS and compatibility search routes; outbound persistence is solid, inbound persistence is partial and bridge-dependent | chat conversation pages | partial match |
 | Webhook | endpoint registry + dispatch | implemented | webhook pages and n8n-style inbound/outbound flows | matched |
 | WebSocket | per-instance config | implemented | websocket manager page | matched |
 | RabbitMQ | per-instance config | implemented | rabbitmq manager page | matched |
@@ -183,17 +184,18 @@ These remain unsupported today and should not be represented as complete product
 
 ### Message history / message search
 
-Unsupported routes:
+Implemented routes:
 
 - `POST /instance/:id/messages/search`
 - `POST /chat/findMessages/:instanceName`
 
-Why unsupported:
+Current limitations:
 
-- current backend does not maintain a tenant-safe `Message[]` history store
-- legacy `pkg/message` persistence only tracks status metadata, not full conversation history
+- outbound text/media/audio history is persisted, but inbound capture still depends on active runtime events reaching the current SaaS process
+- there is no backfill from older sessions or full upstream history sync into the SaaS read model
+- chat history remains queryable by tenant, instance, and `remoteJid`, but it is not yet a complete replacement for every upstream replay path
 
-Frontend pages blocked:
+Frontend pages now unblocked:
 
 - `src/lib/queries/chat/findMessages.ts`
 - `src/pages/instance/Chat/messages.tsx`
@@ -234,8 +236,6 @@ Frontend pages blocked:
 
 ## Legacy Routes Currently Returning `501`
 
-- `POST /instance/:id/messages/search`
-- `POST /chat/findMessages/:instanceName`
 - `GET /instance/:id/sqs`
 - `PUT /instance/:id/sqs`
 - `GET /instance/:id/chatwoot`
@@ -278,7 +278,7 @@ Frontend pages blocked:
 
 ## Recommended Implementation Order
 
-1. Message-history parity: create a tenant-safe conversation/message read model, then replace `messages/search` partials.
+1. Durable inbound history parity: backfill or replay inbound history beyond what the active bridge observes at runtime.
 2. Runtime admin parity: add reconnect/logout/pair route parity without bypassing tenant/auth architecture.
 3. Integration parity: implement only the manager integration suites that are real product priorities, starting with the pages most actively used by the frontend.
 4. Metrics parity: replace placeholder dashboard counters with real aggregates.

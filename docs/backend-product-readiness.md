@@ -2,7 +2,7 @@
 
 Audited on 2026-04-05.
 
-This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, webhook dispatch, CRM, text sending, media sending, audio sending, and a live chat list. It is not yet full Evolution Go / Manager parity because message-history search, several manager integration pages, and some runtime/admin surfaces remain partial or unsupported.
+This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, webhook dispatch, CRM, text sending, media sending, audio sending, a live chat list, and tenant-safe message-history search. It is not yet full Evolution Go / Manager parity because several manager integration pages, some runtime/admin surfaces, and full upstream chat-history replay remain partial or unsupported.
 
 ## Overall Readiness
 
@@ -20,10 +20,10 @@ Strong areas:
 
 Main gaps:
 
-- no tenant-safe message-history store for `Message[]` search parity
 - manager-style integration suites still return explicit `501 partial`
 - dashboard metrics still contain placeholder counters
 - runtime parity still depends on the legacy bridge in `pkg/*`
+- inbound history persistence is still bridge-dependent and not backfilled from older sessions
 
 ## Fully Implemented Routes and Features
 
@@ -117,6 +117,7 @@ Implemented SaaS routes:
 - `POST /instance/:id/messages/media`
 - `POST /instance/:id/messages/audio`
 - `POST /instance/:id/chats/search`
+- `POST /instance/:id/messages/search`
 
 Implemented compatibility routes:
 
@@ -124,6 +125,7 @@ Implemented compatibility routes:
 - `POST /message/sendMedia/:instanceName`
 - `POST /message/sendWhatsAppAudio/:instanceName`
 - `POST /chat/findChats/:instanceName`
+- `POST /chat/findMessages/:instanceName`
 
 Readiness notes:
 
@@ -131,6 +133,9 @@ Readiness notes:
 - Media sending is implemented through the legacy runtime bridge using JSON base64 payloads or URL payloads.
 - Audio sending is implemented through the legacy runtime bridge and audio conversion path.
 - Chat search is functional as a live runtime-backed list of contacts and groups.
+- Message-history search is implemented against a tenant-safe `ConversationMessage` read model scoped by tenant, instance, and `remoteJid`.
+- Outbound text, media, and audio sends are persisted into that read model.
+- Inbound runtime events are persisted when the active legacy bridge delivers them into the current process.
 - Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
 
 ### Instance event connectors and proxy
@@ -226,16 +231,6 @@ Functional routes exist for tenant and instance AI settings, but these do not re
 
 These routes are intentionally mounted and still return structured `501 partial` responses.
 
-### Message history search
-
-- `POST /instance/:id/messages/search`
-- `POST /chat/findMessages/:instanceName`
-
-Current blockers:
-
-- no tenant-safe message-history repository matching the legacy `Message[]` contract
-- no safe durable replay/query layer for full chat history in the SaaS backend
-
 ### Connector and manager integration surfaces
 
 - `GET /instance/:id/sqs`
@@ -287,14 +282,14 @@ These capabilities are still missing from the active SaaS surface even though th
 - Kafka connector parity
 - tenant-safe Chatwoot storage and runtime wiring
 - tenant-safe CRUD for OpenAI, Typebot, Dify, N8N, EvoAI, EvolutionBot, and Flowise
-- full message-history query/search parity
+- full upstream chat-history replay/backfill parity
 - full broadcast-to-WhatsApp execution
 - trustworthy product analytics beyond instance counts
 
 ## Known Technical Debt
 
 - core runtime behavior still depends on the legacy bridge in `pkg/*`
-- message history is still not modeled as a tenant-safe SaaS repository
+- message history now uses a tenant-safe SaaS repository, but inbound capture still depends on active bridge events and receipts
 - many manager integration suites are represented only as explicit `501` placeholders
 - dashboard metrics still contain placeholders
 - Swagger artifacts remain stale relative to `cmd/api`
@@ -302,7 +297,7 @@ These capabilities are still missing from the active SaaS surface even though th
 
 ## Next Recommended Backend Priorities
 
-1. Implement tenant-safe message history persistence or a safe read-model, then replace `messages/search` partials.
+1. Add durable inbound/backfill parity so message history is not limited to events seen by the current SaaS process.
 2. Add runtime parity for reconnect/logout/pairing flows needed by manager-level lifecycle UX.
 3. Decide which manager integration suites are true product priorities and implement only those with tenant-safe repositories.
 4. Replace placeholder dashboard metrics with real aggregates or label them partial in UI.

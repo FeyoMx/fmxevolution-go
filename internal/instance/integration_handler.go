@@ -112,10 +112,20 @@ func (h *Handler) SearchChats(c *gin.Context) {
 }
 
 func (h *Handler) SearchMessages(c *gin.Context) {
-	h.writePartialFeature(c, "chat", []string{
-		"tenant-safe message search is not available in the current SaaS persistence layer",
-		"the current backend does not store the Message[] contract required by the legacy frontend",
-	})
+	var input MessageSearchRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		return
+	}
+
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	messages, _, err := h.service.SearchMessages(c.Request.Context(), identity.TenantID, c.Param("id"), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, messages)
 }
 
 func (h *Handler) SendMediaMessage(c *gin.Context) {

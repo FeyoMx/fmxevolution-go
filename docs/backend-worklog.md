@@ -38,11 +38,17 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
   - `POST /instance/:id/messages/audio`
 - implemented live runtime-backed chat list on:
   - `POST /instance/:id/chats/search`
+- implemented tenant-safe message history search on:
+  - `POST /instance/:id/messages/search`
+  - `POST /chat/findMessages/:instanceName`
 - added legacy compatibility routes for the current frontend chat composer:
   - `POST /message/sendText/:instanceName`
   - `POST /message/sendMedia/:instanceName`
   - `POST /message/sendWhatsAppAudio/:instanceName`
   - `POST /chat/findChats/:instanceName`
+- introduced a persisted `ConversationMessage` read model scoped by tenant, instance, and `remoteJid`
+- persisted outbound text, media, and audio sends into that read model
+- wired inbound runtime message events and delivery receipts into the same read model where the active bridge can safely provide them
 
 ### Connector work already completed
 
@@ -61,7 +67,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 
 ## Important remaining gaps
 
-- full message-history search is still unsupported
+- inbound history is still partial because there is no backfill from older sessions or full upstream history replay
 - Chatwoot, SQS, and manager-style integration suites remain explicit `501 partial`
 - dashboard metrics still include placeholders
 - runtime parity still depends heavily on the legacy bridge
@@ -88,13 +94,13 @@ High-signal files updated for this phase include:
 ### Now more aligned
 
 - backend docs reflect that media and audio sending are no longer `501`
-- backend docs now call out chat-list parity versus message-history parity separately
+- backend docs now call out chat-list parity versus message-history persistence separately
 - current frontend chat send routes now have explicit backend compatibility routes instead of only SaaS instance routes
+- current frontend chat history pages now have a truthful tenant-safe `Message[]` search surface
 
 ### Still intentionally partial
 
-- `POST /instance/:id/messages/search`
-- `POST /chat/findMessages/:instanceName`
+- inbound history completeness and backfill across older sessions
 - `GET/PUT /instance/:id/sqs`
 - `GET/PUT /instance/:id/chatwoot`
 - all mounted manager bot/integration suites under:
@@ -109,5 +115,5 @@ High-signal files updated for this phase include:
 ## Verification notes
 
 - code was reformatted with `gofmt`
-- full `go build -o api2.exe ./cmd/api` verification is currently blocked in this environment by the existing `github.com/chai2010/webp` dependency failing to resolve generated symbols during build
-- that build issue is environment/dependency-level and not isolated to the new instance parity code
+- `go build -o api2.exe ./cmd/api` passed
+- `go test ./internal/instance ./internal/broadcast ./pkg/sendstatus` passed

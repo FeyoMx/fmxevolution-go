@@ -85,8 +85,8 @@ Runtime dependencies:
 
 Blockers:
 
-- no current tenant-safe `Message[]` history store
-- current legacy message repository stores status metadata, not conversation history
+- inbound history is still limited to events seen by the active bridge process
+- there is no SaaS-owned backfill or upstream replay into the read model yet
 
 Test strategy:
 
@@ -180,6 +180,6 @@ Test strategy:
 ## Immediate Execution Order
 
 1. Keep phase 1 routes stable and verify media/audio/text compatibility.
-2. Build the message-history read model for phase 2 before claiming chat parity.
+2. Extend phase 2 from outbound-plus-live-bridge history into durable inbound/backfill parity.
 3. Pick one integration family at a time for phase 3, starting from actual frontend/business demand.
 4. Finish metrics and documentation cleanup in phase 4 after core parity work stops moving.
