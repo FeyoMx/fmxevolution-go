@@ -43,6 +43,17 @@ type ConversationMessageRepository interface {
 	MarkReceipt(ctx context.Context, instanceID, externalMessageID, state string, at time.Time) error
 }
 
+type RuntimeSessionEventFilter struct {
+	Limit int
+}
+
+type RuntimeObservabilityRepository interface {
+	UpsertState(ctx context.Context, state *RuntimeSessionState) error
+	GetState(ctx context.Context, tenantID, instanceID string) (*RuntimeSessionState, error)
+	AppendEvent(ctx context.Context, event *RuntimeSessionEvent) error
+	ListEvents(ctx context.Context, tenantID, instanceID string, filter RuntimeSessionEventFilter) ([]RuntimeSessionEvent, error)
+}
+
 type CRMRepository interface {
 	CreateContact(ctx context.Context, contact *Contact) error
 	GetContact(ctx context.Context, tenantID, contactID string) (*Contact, error)

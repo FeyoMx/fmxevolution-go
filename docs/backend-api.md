@@ -178,6 +178,10 @@ This keeps both `response.data` and `response.data.data` consumers working.
 |---|---|---|---|---|---|
 | `GET` | `/instance/:id/status` | owner, admin, agent | none | `{ instance_id, instanceName, engine_instance_id, status, connected }` envelope | current tenant only |
 | `GET` | `/instance/id/:instanceID/status` | owner, admin, agent | none | same | current tenant only |
+| `GET` | `/instance/:id/runtime` | owner, admin, agent | none | durable runtime status envelope with `durable`, optional `live`, and observability metadata | current tenant only |
+| `GET` | `/instance/id/:instanceID/runtime` | owner, admin, agent | none | same | current tenant only |
+| `GET` | `/instance/:id/runtime/history` | owner, admin, agent | query `limit?` | durable runtime event history with normalized lifecycle events | current tenant only |
+| `GET` | `/instance/id/:instanceID/runtime/history` | owner, admin, agent | query `limit?` | same | current tenant only |
 | `GET` | `/instance/:id/qr` | owner, admin, agent | none | `{ instance_id, instanceName, engine_instance_id, status, connected, qrcode, code }` envelope | current tenant only |
 | `GET` | `/instance/:id/qrcode` | owner, admin, agent | none | same | current tenant only |
 | `GET` | `/instance/id/:instanceID/qr` | owner, admin, agent | none | same | current tenant only |
@@ -187,6 +191,14 @@ Fallback behavior:
 
 - if QR is not available yet, status falls back to `connecting` or `open` depending on runtime state
 - empty QR payloads are normalized to `qrcode: ""` and `code: ""`
+
+Runtime observability notes:
+
+- `/instance/*/runtime` is the tenant-safe status endpoint for lifecycle UX. It returns a durable status block sourced from the SaaS database and, when the bridge is reachable, an additional `live` block sourced from the current runtime snapshot.
+- Durable lifecycle history currently records `connected`, `disconnected`, `pairing_started`, `paired`, `reconnect_requested`, `logout`, and `status_observed`.
+- `status_observed` is a persisted "last seen" refresh event; it helps the frontend distinguish stale durable state from a recent live poll.
+- `live` data remains bridge-dependent and may be missing when the legacy runtime is unavailable.
+- `runtime/history` is durable per tenant and instance; it does not require the bridge for reads.
 
 ### Advanced settings
 
@@ -225,7 +237,8 @@ Notes:
 - `chats/search` is now functional, but it is a live runtime-backed list of contacts and groups, not a full persisted chat-history model.
 - `messages/search` is now backed by a tenant-safe `ConversationMessage` read model in the SaaS database.
 - Current persistence is strongest for outbound text/media/audio sends.
-- Inbound messages are captured from the active runtime bridge when those events reach the current process, but there is no historical backfill or full upstream replay yet.
+- Inbound messages are now persisted through both the active runtime bridge callback path and a tenant-safe inbound webhook fallback path when `DispatchInbound` includes enough message metadata.
+- There is still no historical backfill or full upstream replay for sessions that were not observed by the current SaaS process.
 - media/audio support is currently scoped to the JSON shapes used by the current frontend.
 
 #### Event connectors and proxy

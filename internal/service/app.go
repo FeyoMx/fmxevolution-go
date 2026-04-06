@@ -17,7 +17,9 @@ import (
 	"github.com/EvolutionAPI/evolution-go/internal/tenant"
 	"github.com/EvolutionAPI/evolution-go/internal/webhook"
 	"github.com/EvolutionAPI/evolution-go/pkg/chathistory"
+	"github.com/EvolutionAPI/evolution-go/pkg/runtimeobs"
 	"github.com/EvolutionAPI/evolution-go/pkg/sendstatus"
+	"github.com/google/uuid"
 )
 
 type Application struct {
@@ -52,7 +54,7 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 	app := &Application{
 		Auth:      auth.NewService(stores.Tenants, stores.Users, tokens),
 		Tenants:   tenant.NewService(stores.Tenants, stores.Users),
-		Instances: instance.NewService(stores.Instances, stores.ConversationMessages, instanceRuntime, runtimeFactory, logger.With("module", "instance")),
+		Instances: instance.NewService(stores.Instances, stores.ConversationMessages, stores.RuntimeObservability, instanceRuntime, runtimeFactory, logger.With("module", "instance")),
 		CRM:       crm.NewService(stores.CRM),
 		Webhooks:  webhookService,
 		AI:        aiService,
@@ -174,6 +176,100 @@ func registerConversationCallbacks(stores *repository.Stores, logger *slog.Logge
 			logger.Warn("persist inbound conversation history failed", "instance_id", message.InstanceID, "message_id", message.MessageID, "error", err)
 		}
 	})
+
+	if stores.RuntimeObservability == nil {
+		return
+	}
+
+	runtimeobs.RegisterLifecycleListener(func(event runtimeobs.LifecycleEvent) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		instanceRecord, err := stores.Instances.GetByGlobalID(ctx, event.InstanceID)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("resolve instance for runtime observability failed", "instance_id", event.InstanceID, "event_type", event.EventType, "error", err)
+			}
+			return
+		}
+
+		occurredAt := event.OccurredAt.UTC()
+		state, err := stores.RuntimeObservability.GetState(ctx, instanceRecord.TenantID, instanceRecord.ID)
+		if err != nil && logger != nil {
+			logger.Warn("load runtime observability state failed", "instance_id", event.InstanceID, "event_type", event.EventType, "error", err)
+		}
+		if state == nil {
+			state = &repository.RuntimeSessionState{
+				ID:             uuid.NewString(),
+				TenantID:       instanceRecord.TenantID,
+				InstanceID:     instanceRecord.ID,
+				Status:         firstRuntimeStatus(event.Status, instanceRecord.Status, "created"),
+				LastSeenStatus: firstRuntimeStatus(event.Status, instanceRecord.Status, "created"),
+			}
+		}
+
+		nextStatus := firstRuntimeStatus(event.Status, state.LastSeenStatus, instanceRecord.Status, "created")
+		state.Status = nextStatus
+		state.LastSeenStatus = nextStatus
+		state.LastEventType = strings.TrimSpace(event.EventType)
+		state.LastEventSource = firstRuntimeStatus(event.EventSource, state.LastEventSource, "runtime")
+		state.Connected = event.Connected
+		state.LoggedIn = event.LoggedIn
+		state.PairingActive = event.PairingActive
+		state.DisconnectReason = strings.TrimSpace(event.DisconnectReason)
+		state.LastError = strings.TrimSpace(event.ErrorMessage)
+		state.LastEventAt = &occurredAt
+		state.LastSeenAt = &occurredAt
+
+		switch strings.TrimSpace(event.EventType) {
+		case "connected", "paired":
+			state.LastConnectedAt = &occurredAt
+		case "disconnected":
+			state.LastDisconnectedAt = &occurredAt
+		case "logout":
+			state.LastLogoutAt = &occurredAt
+			state.LastDisconnectedAt = &occurredAt
+		}
+		if strings.TrimSpace(event.EventType) == "paired" {
+			state.LastPairedAt = &occurredAt
+		}
+
+		if err := stores.RuntimeObservability.UpsertState(ctx, state); err != nil {
+			if logger != nil {
+				logger.Warn("persist runtime observability state failed", "instance_id", event.InstanceID, "event_type", event.EventType, "error", err)
+			}
+			return
+		}
+
+		record := &repository.RuntimeSessionEvent{
+			ID:               uuid.NewString(),
+			TenantID:         instanceRecord.TenantID,
+			InstanceID:       instanceRecord.ID,
+			EventType:        strings.TrimSpace(event.EventType),
+			EventSource:      firstRuntimeStatus(event.EventSource, "runtime"),
+			Status:           nextStatus,
+			Connected:        event.Connected,
+			LoggedIn:         event.LoggedIn,
+			PairingActive:    event.PairingActive,
+			DisconnectReason: strings.TrimSpace(event.DisconnectReason),
+			ErrorMessage:     strings.TrimSpace(event.ErrorMessage),
+			Message:          strings.TrimSpace(event.Message),
+			Payload:          marshalConversationPayload(event.Payload),
+			OccurredAt:       occurredAt,
+		}
+		if err := stores.RuntimeObservability.AppendEvent(ctx, record); err != nil && logger != nil {
+			logger.Warn("persist runtime observability event failed", "instance_id", event.InstanceID, "event_type", event.EventType, "error", err)
+		}
+	})
+}
+
+func firstRuntimeStatus(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func marshalConversationPayload(payload map[string]any) string {

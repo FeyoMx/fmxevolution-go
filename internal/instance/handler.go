@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
@@ -429,6 +430,50 @@ func (h *Handler) StatusByID(c *gin.Context) {
 	h.writeNormalizedStatus(c, http.StatusOK, instance)
 }
 
+func (h *Handler) RuntimeStatus(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, state, snapshot, err := h.service.RuntimeStatus(c.Request.Context(), identity.TenantID, c.Param("id"))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildRuntimeStatusEnvelope(instance, state, snapshot))
+}
+
+func (h *Handler) RuntimeStatusByID(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, state, snapshot, err := h.service.RuntimeStatusByID(c.Request.Context(), identity.TenantID, c.Param("instanceID"))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildRuntimeStatusEnvelope(instance, state, snapshot))
+}
+
+func (h *Handler) RuntimeHistory(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, events, err := h.service.RuntimeHistory(c.Request.Context(), identity.TenantID, c.Param("id"), runtimeHistoryLimit(c))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildRuntimeHistoryEnvelope(instance, events))
+}
+
+func (h *Handler) RuntimeHistoryByID(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	instance, events, err := h.service.RuntimeHistoryByID(c.Request.Context(), identity.TenantID, c.Param("instanceID"), runtimeHistoryLimit(c))
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildRuntimeHistoryEnvelope(instance, events))
+}
+
 func (h *Handler) QRCode(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	instance, snapshot, err := h.service.QRCode(c.Request.Context(), identity.TenantID, c.Param("id"))
@@ -718,6 +763,103 @@ func buildStatusPayload(instance *repository.Instance) gin.H {
 	return payload
 }
 
+func buildRuntimeStatusEnvelope(instance *repository.Instance, state *repository.RuntimeSessionState, snapshot *RuntimeSnapshot) gin.H {
+	payload := buildStatusPayload(instance)
+
+	durable := gin.H{
+		"available":            state != nil,
+		"status":               "",
+		"last_seen_status":     "",
+		"last_event_type":      "",
+		"last_event_source":    "",
+		"connected":            false,
+		"logged_in":            false,
+		"pairing_active":       false,
+		"disconnect_reason":    "",
+		"last_error":           "",
+		"last_seen_at":         nil,
+		"last_event_at":        nil,
+		"last_connected_at":    nil,
+		"last_disconnected_at": nil,
+		"last_paired_at":       nil,
+		"last_logout_at":       nil,
+		"bridge_dependent":     false,
+	}
+	if state != nil {
+		durable["status"] = state.Status
+		durable["last_seen_status"] = state.LastSeenStatus
+		durable["last_event_type"] = state.LastEventType
+		durable["last_event_source"] = state.LastEventSource
+		durable["connected"] = state.Connected
+		durable["logged_in"] = state.LoggedIn
+		durable["pairing_active"] = state.PairingActive
+		durable["disconnect_reason"] = state.DisconnectReason
+		durable["last_error"] = state.LastError
+		durable["last_seen_at"] = state.LastSeenAt
+		durable["last_event_at"] = state.LastEventAt
+		durable["last_connected_at"] = state.LastConnectedAt
+		durable["last_disconnected_at"] = state.LastDisconnectedAt
+		durable["last_paired_at"] = state.LastPairedAt
+		durable["last_logout_at"] = state.LastLogoutAt
+	}
+
+	var live any = nil
+	if snapshot != nil {
+		livePayload := gin.H{}
+		enrichPayloadWithSnapshot(livePayload, snapshot)
+		livePayload["available"] = true
+		livePayload["bridge_dependent"] = true
+		live = livePayload
+		enrichPayloadWithSnapshot(payload, snapshot)
+	}
+
+	payload["durable"] = durable
+	payload["live"] = live
+	payload["observability"] = gin.H{
+		"durable_status_available": state != nil,
+		"live_status_available":    snapshot != nil,
+		"history_durable":          true,
+		"bridge_required_for_live": true,
+	}
+
+	return gin.H{
+		"message": "success",
+		"data":    payload,
+	}
+}
+
+func buildRuntimeHistoryEnvelope(instance *repository.Instance, events []repository.RuntimeSessionEvent) gin.H {
+	items := make([]gin.H, 0, len(events))
+	for _, event := range events {
+		item := gin.H{
+			"id":                event.ID,
+			"event_type":        event.EventType,
+			"event_source":      event.EventSource,
+			"status":            event.Status,
+			"connected":         event.Connected,
+			"logged_in":         event.LoggedIn,
+			"pairing_active":    event.PairingActive,
+			"disconnect_reason": event.DisconnectReason,
+			"error_message":     event.ErrorMessage,
+			"message":           event.Message,
+			"payload":           decodeJSONText(event.Payload),
+			"occurred_at":       event.OccurredAt,
+		}
+		items = append(items, item)
+	}
+
+	payload := buildStatusPayload(instance)
+	payload["history"] = items
+	payload["history_count"] = len(items)
+	payload["history_durable"] = true
+	payload["live_bridge_required_for_new_events"] = true
+
+	return gin.H{
+		"message": "success",
+		"data":    payload,
+	}
+}
+
 func buildQRCodePayload(instance *repository.Instance, snapshot *RuntimeSnapshot) gin.H {
 	payload := buildStatusPayload(instance)
 	payload["qrcode"] = ""
@@ -790,6 +932,33 @@ func writeLegacyCompatibleEnvelope(c *gin.Context, statusCode int, message strin
 		response[key] = value
 	}
 	sharedhandler.WriteJSON(c, statusCode, response)
+}
+
+func runtimeHistoryLimit(c *gin.Context) int {
+	raw := strings.TrimSpace(c.Query("limit"))
+	if raw == "" {
+		return 50
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 50
+	}
+	if value > 200 {
+		return 200
+	}
+	return value
+}
+
+func decodeJSONText(raw string) any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return raw
+	}
+	return payload
 }
 
 func (h *Handler) writeInstanceDetails(c *gin.Context, tenantID string, instance *repository.Instance) {

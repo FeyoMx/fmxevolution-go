@@ -2,7 +2,7 @@
 
 Audited on 2026-04-06.
 
-This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, webhook dispatch, CRM, text sending, media sending, audio sending, a live chat list, and tenant-safe message-history search. It is not yet full Evolution Go / Manager parity because several manager integration pages, some runtime/admin surfaces, and full upstream chat-history replay remain partial or unsupported.
+This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, durable runtime observability, webhook dispatch, CRM, text sending, media sending, audio sending, a live chat list, and tenant-safe message-history search. It is not yet full Evolution Go / Manager parity because several manager integration pages, some runtime/admin surfaces, and full upstream chat-history replay remain partial or unsupported.
 
 ## Overall Readiness
 
@@ -11,7 +11,7 @@ Current backend maturity: usable, with explicit partials.
 Strong areas:
 
 - tenant auth, JWT, API key, and legacy instance-token compatibility
-- tenant-scoped instance CRUD, connect, disconnect, reconnect, pair, logout, QR, status, and advanced settings
+- tenant-scoped instance CRUD, connect, disconnect, reconnect, pair, logout, QR, status, advanced settings, and durable runtime history
 - text sending with async delivery tracking
 - media and audio sending through the legacy runtime bridge
 - webhook management and tenant-safe dispatch
@@ -23,7 +23,7 @@ Main gaps:
 - manager-style integration suites still return explicit `501 partial`
 - dashboard metrics still contain placeholder counters
 - runtime parity still depends on the legacy bridge in `pkg/*`
-- inbound history persistence is still bridge-dependent and not backfilled from older sessions
+- inbound history persistence is more reliable, but completeness is still bridge-dependent and not backfilled from older sessions
 
 ## Fully Implemented Routes and Features
 
@@ -96,6 +96,10 @@ Implemented routes:
 - `DELETE /instance/id/:instanceID/logout`
 - `GET /instance/:id/status`
 - `GET /instance/id/:instanceID/status`
+- `GET /instance/:id/runtime`
+- `GET /instance/id/:instanceID/runtime`
+- `GET /instance/:id/runtime/history`
+- `GET /instance/id/:instanceID/runtime/history`
 - `GET /instance/:id/qr`
 - `GET /instance/:id/qrcode`
 - `GET /instance/id/:instanceID/qr`
@@ -108,11 +112,14 @@ Implemented routes:
 Readiness notes:
 
 - Tenant-scoped instance CRUD is implemented.
-- Connect, disconnect, reconnect, pair, logout, QR, and status are implemented through the legacy runtime bridge.
+- Connect, disconnect, reconnect, pair, logout, QR, and live status are implemented through the legacy runtime bridge.
+- Durable runtime session state and runtime lifecycle events are persisted in the SaaS database and exposed on tenant-safe runtime routes.
 - Advanced settings are implemented through the legacy bridge.
 - Response shaping keeps older frontend consumers working.
 - Runtime admin actions stay tenant-safe because the SaaS layer resolves the instance inside the authenticated tenant before invoking the bridge.
 - Logout remains intentionally stricter than legacy-global behavior: the bridge only reports success when there is an active logged-in runtime session to terminate.
+- The durable runtime model records `connected`, `disconnected`, `pairing_started`, `paired`, `reconnect_requested`, `logout`, and `status_observed`.
+- The runtime status endpoint is partially bridge-independent: durable state reads do not require the live bridge, but the optional `live` block still does.
 
 ### Messaging
 
@@ -144,6 +151,7 @@ Readiness notes:
 - Message-history search is implemented against a tenant-safe `ConversationMessage` read model scoped by tenant, instance, and `remoteJid`.
 - Outbound text, media, and audio sends are persisted into that read model.
 - Inbound runtime events are persisted when the active legacy bridge delivers them into the current process.
+- Inbound webhook dispatch now also publishes into the same read model when the webhook payload includes enough message metadata.
 - Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
 
 ### Instance event connectors and proxy
@@ -205,6 +213,19 @@ Readiness notes:
 ## Partially Matched Features
 
 These areas are functional enough to be mounted, but they are not full upstream parity yet.
+
+### Runtime observability parity
+
+Functional routes:
+
+- `GET /instance/:id/runtime`
+- `GET /instance/:id/runtime/history`
+
+Current limitations:
+
+- durable state is only as complete as the lifecycle events observed by this SaaS process
+- the `live` runtime block still depends on the legacy bridge being reachable
+- there is no historical replay for runtime lifecycle events that happened before observability was added
 
 ### Chat list parity
 

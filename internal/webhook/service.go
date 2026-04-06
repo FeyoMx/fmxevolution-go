@@ -17,6 +17,7 @@ import (
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
+	"github.com/EvolutionAPI/evolution-go/pkg/chathistory"
 )
 
 type HTTPClient interface {
@@ -138,6 +139,8 @@ func (s *Service) Get(ctx context.Context, tenantID, endpointID string) (*reposi
 }
 
 func (s *Service) DispatchInbound(ctx context.Context, tenantID string, input DispatchInput) ([]DeliveryResult, error) {
+	notifyInboundConversationFallback(input)
+
 	results, err := s.dispatch(ctx, tenantID, "inbound", input)
 	if err != nil {
 		return nil, err
@@ -155,6 +158,42 @@ func (s *Service) DispatchInbound(ctx context.Context, tenantID string, input Di
 	}
 
 	return results, nil
+}
+
+func notifyInboundConversationFallback(input DispatchInput) {
+	if !isInboundConversationEvent(input.EventType) {
+		return
+	}
+
+	instanceID := strings.TrimSpace(input.InstanceID)
+	messageID := strings.TrimSpace(input.MessageID)
+	remoteJID := firstNonEmptyString(
+		anyString(input.Data["remote_jid"]),
+		anyString(input.Data["remoteJid"]),
+		anyString(input.Data["chat_id"]),
+		anyString(input.Data["chatId"]),
+		anyString(input.Data["from"]),
+	)
+	if instanceID == "" || messageID == "" || remoteJID == "" {
+		return
+	}
+
+	payload := normalizedWebhookMessagePayload(input.Data)
+	chathistory.NotifyInboundMessage(chathistory.InboundMessage{
+		InstanceID:  instanceID,
+		MessageID:   messageID,
+		RemoteJID:   remoteJID,
+		PushName:    firstNonEmptyString(anyString(input.Data["push_name"]), anyString(input.Data["pushName"])),
+		MessageType: firstNonEmptyString(anyString(input.Data["message_type"]), anyString(input.Data["messageType"]), inferredWebhookMessageType(payload)),
+		Body:        firstNonEmptyString(messageTextFromData(input.Data), messageTextFromData(payload)),
+		Source:      trimRemoteJID(remoteJID),
+		MediaURL:    firstNonEmptyString(anyString(input.Data["media_url"]), anyString(input.Data["mediaUrl"]), anyString(payload["media_url"]), anyString(payload["mediaUrl"])),
+		MimeType:    firstNonEmptyString(anyString(input.Data["mime_type"]), anyString(input.Data["mimeType"]), anyString(payload["mime_type"]), anyString(payload["mimeType"])),
+		FileName:    firstNonEmptyString(anyString(input.Data["file_name"]), anyString(input.Data["fileName"]), anyString(payload["file_name"]), anyString(payload["fileName"])),
+		Caption:     firstNonEmptyString(anyString(input.Data["caption"]), anyString(payload["caption"])),
+		Message:     payload,
+		Timestamp:   timestampFromWebhookInput(input.Data),
+	})
 }
 
 func (s *Service) DispatchOutbound(ctx context.Context, tenantID string, input DispatchInput) ([]DeliveryResult, error) {
@@ -294,4 +333,85 @@ func conversationKeyFromData(input DispatchInput) string {
 		return strings.TrimSpace(input.InstanceID)
 	}
 	return ""
+}
+
+func isInboundConversationEvent(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "message", "message.received", "messages.upsert", "message.upsert":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizedWebhookMessagePayload(data map[string]any) map[string]any {
+	if data == nil {
+		return map[string]any{}
+	}
+	if payload, ok := data["Message"].(map[string]any); ok && payload != nil {
+		return payload
+	}
+	if payload, ok := data["message"].(map[string]any); ok && payload != nil {
+		return payload
+	}
+	return data
+}
+
+func inferredWebhookMessageType(payload map[string]any) string {
+	switch {
+	case payload == nil:
+		return ""
+	case payload["imageMessage"] != nil:
+		return "imageMessage"
+	case payload["videoMessage"] != nil:
+		return "videoMessage"
+	case payload["audioMessage"] != nil:
+		return "audioMessage"
+	case payload["documentMessage"] != nil:
+		return "documentMessage"
+	case payload["extendedTextMessage"] != nil:
+		return "conversation"
+	case strings.TrimSpace(anyString(payload["conversation"])) != "":
+		return "conversation"
+	default:
+		return ""
+	}
+}
+
+func anyString(value any) string {
+	text, _ := value.(string)
+	return strings.TrimSpace(text)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func trimRemoteJID(remoteJID string) string {
+	trimmed := strings.TrimSpace(remoteJID)
+	if idx := strings.Index(trimmed, "@"); idx >= 0 {
+		return trimmed[:idx]
+	}
+	return trimmed
+}
+
+func timestampFromWebhookInput(data map[string]any) time.Time {
+	for _, key := range []string{"timestamp", "message_timestamp", "messageTimestamp"} {
+		if raw, ok := data[key]; ok {
+			switch value := raw.(type) {
+			case string:
+				if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value)); err == nil {
+					return parsed.UTC()
+				}
+			case time.Time:
+				return value.UTC()
+			}
+		}
+	}
+	return time.Now().UTC()
 }

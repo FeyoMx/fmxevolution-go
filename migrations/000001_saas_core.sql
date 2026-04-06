@@ -35,6 +35,53 @@ CREATE TABLE IF NOT EXISTS instances (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS runtime_session_states (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    instance_id uuid NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    status varchar(50) NOT NULL DEFAULT 'created',
+    last_seen_status varchar(50) NOT NULL DEFAULT 'created',
+    last_event_type varchar(100) NOT NULL DEFAULT 'created',
+    last_event_source varchar(50) NOT NULL DEFAULT 'system',
+    connected boolean NOT NULL DEFAULT false,
+    logged_in boolean NOT NULL DEFAULT false,
+    pairing_active boolean NOT NULL DEFAULT false,
+    disconnect_reason varchar(255),
+    last_error text,
+    last_event_at timestamptz NULL,
+    last_seen_at timestamptz NULL,
+    last_connected_at timestamptz NULL,
+    last_disconnected_at timestamptz NULL,
+    last_paired_at timestamptz NULL,
+    last_logout_at timestamptz NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_session_state_instance ON runtime_session_states (tenant_id, instance_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_session_state_lookup ON runtime_session_states (tenant_id, instance_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS runtime_session_events (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    instance_id uuid NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    event_type varchar(100) NOT NULL,
+    event_source varchar(50) NOT NULL,
+    status varchar(50) NOT NULL,
+    connected boolean NOT NULL DEFAULT false,
+    logged_in boolean NOT NULL DEFAULT false,
+    pairing_active boolean NOT NULL DEFAULT false,
+    disconnect_reason varchar(255),
+    error_message text,
+    message text,
+    payload text,
+    occurred_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_runtime_session_events_lookup ON runtime_session_events (tenant_id, instance_id, event_type, occurred_at);
+
 CREATE TABLE IF NOT EXISTS contacts (
     id uuid PRIMARY KEY,
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,

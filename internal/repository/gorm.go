@@ -20,6 +20,7 @@ type Stores struct {
 	Users                UserRepository
 	Instances            InstanceRepository
 	ConversationMessages ConversationMessageRepository
+	RuntimeObservability RuntimeObservabilityRepository
 	CRM                  CRMRepository
 	Broadcasts           BroadcastRepository
 	Webhooks             WebhookRepository
@@ -47,6 +48,8 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 		&Instance{},
 		&Message{},
 		&ConversationMessage{},
+		&RuntimeSessionState{},
+		&RuntimeSessionEvent{},
 		&Contact{},
 		&Tag{},
 		&Note{},
@@ -69,6 +72,7 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 		Users:                &gormUserRepository{db: db},
 		Instances:            &gormInstanceRepository{db: db},
 		ConversationMessages: &gormConversationMessageRepository{db: db},
+		RuntimeObservability: &gormRuntimeObservabilityRepository{db: db},
 		CRM:                  &gormCRMRepository{db: db},
 		Broadcasts:           &gormBroadcastRepository{db: db},
 		Webhooks:             &gormWebhookRepository{db: db},
@@ -218,6 +222,8 @@ type gormCRMRepository struct{ db *gorm.DB }
 
 type gormConversationMessageRepository struct{ db *gorm.DB }
 
+type gormRuntimeObservabilityRepository struct{ db *gorm.DB }
+
 func (r *gormConversationMessageRepository) Upsert(ctx context.Context, message *ConversationMessage) error {
 	if message == nil {
 		return nil
@@ -314,6 +320,73 @@ func (r *gormConversationMessageRepository) MarkReceipt(ctx context.Context, ins
 		Model(&ConversationMessage{}).
 		Where("instance_id = ? AND external_message_id = ?", instanceID, externalMessageID).
 		Updates(updates).Error
+}
+
+func (r *gormRuntimeObservabilityRepository) UpsertState(ctx context.Context, state *RuntimeSessionState) error {
+	if state == nil {
+		return nil
+	}
+
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "tenant_id"},
+			{Name: "instance_id"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"status",
+			"last_seen_status",
+			"last_event_type",
+			"last_event_source",
+			"connected",
+			"logged_in",
+			"pairing_active",
+			"disconnect_reason",
+			"last_error",
+			"last_event_at",
+			"last_seen_at",
+			"last_connected_at",
+			"last_disconnected_at",
+			"last_paired_at",
+			"last_logout_at",
+			"updated_at",
+		}),
+	}).Create(state).Error
+}
+
+func (r *gormRuntimeObservabilityRepository) GetState(ctx context.Context, tenantID, instanceID string) (*RuntimeSessionState, error) {
+	var state RuntimeSessionState
+	err := r.db.WithContext(ctx).First(&state, "tenant_id = ? AND instance_id = ?", tenantID, instanceID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (r *gormRuntimeObservabilityRepository) AppendEvent(ctx context.Context, event *RuntimeSessionEvent) error {
+	if event == nil {
+		return nil
+	}
+	return r.db.WithContext(ctx).Create(event).Error
+}
+
+func (r *gormRuntimeObservabilityRepository) ListEvents(ctx context.Context, tenantID, instanceID string, filter RuntimeSessionEventFilter) ([]RuntimeSessionEvent, error) {
+	var events []RuntimeSessionEvent
+	query := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND instance_id = ?", tenantID, instanceID).
+		Order("occurred_at DESC, created_at DESC")
+	if filter.Limit > 0 {
+		query = query.Limit(filter.Limit)
+	}
+	if err := query.Find(&events).Error; err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	return events, nil
 }
 
 func (r *gormCRMRepository) CreateContact(ctx context.Context, contact *Contact) error {

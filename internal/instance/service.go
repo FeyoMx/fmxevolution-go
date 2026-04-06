@@ -13,6 +13,7 @@ import (
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 	legacyInstanceModel "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	legacyInstanceService "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
+	"github.com/EvolutionAPI/evolution-go/pkg/runtimeobs"
 	"github.com/EvolutionAPI/evolution-go/pkg/sendstatus"
 	"github.com/google/uuid"
 )
@@ -20,6 +21,7 @@ import (
 type Service struct {
 	repo           repository.InstanceRepository
 	history        repository.ConversationMessageRepository
+	observability  repository.RuntimeObservabilityRepository
 	runtime        Runtime
 	runtimeFactory func() (Runtime, error)
 	runtimeMu      sync.Mutex
@@ -46,10 +48,11 @@ type SendMediaOutput = SendMediaResult
 
 type SendTextJobStatus = sendstatus.JobStatus
 
-func NewService(repo repository.InstanceRepository, history repository.ConversationMessageRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
+func NewService(repo repository.InstanceRepository, history repository.ConversationMessageRepository, observability repository.RuntimeObservabilityRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
 	return &Service{
 		repo:           repo,
 		history:        history,
+		observability:  observability,
 		runtime:        runtime,
 		runtimeFactory: runtimeFactory,
 		logger:         logger,
@@ -130,6 +133,7 @@ func (s *Service) Connect(ctx context.Context, tenantID, reference string) (*rep
 			}
 			return nil, runtimeErr
 		}
+		s.recordRuntimeObservation(ctx, instance, snapshot, "connected", "api", "instance connect queued", nil)
 		return s.applySnapshot(ctx, instance, snapshot)
 	} else if ensureErr != nil && s.logger != nil {
 		s.logger.Warn("connect runtime unavailable, using local status only", "instance_id", instance.ID, "reference", reference, "error", ensureErr)
@@ -139,6 +143,7 @@ func (s *Service) Connect(ctx context.Context, tenantID, reference string) (*rep
 	if err := s.repo.Update(ctx, instance); err != nil {
 		return nil, err
 	}
+	s.recordRuntimeObservation(ctx, instance, nil, "connected", "api", "instance connect queued", nil)
 	return instance, nil
 }
 
@@ -156,6 +161,7 @@ func (s *Service) ConnectByID(ctx context.Context, tenantID, instanceID string) 
 			}
 			return nil, runtimeErr
 		}
+		s.recordRuntimeObservation(ctx, instance, snapshot, "connected", "api", "instance connect queued", nil)
 		return s.applySnapshot(ctx, instance, snapshot)
 	} else if ensureErr != nil && s.logger != nil {
 		s.logger.Warn("connect runtime unavailable, using local status only", "instance_id", instance.ID, "error", ensureErr)
@@ -165,6 +171,7 @@ func (s *Service) ConnectByID(ctx context.Context, tenantID, instanceID string) 
 	if err := s.repo.Update(ctx, instance); err != nil {
 		return nil, err
 	}
+	s.recordRuntimeObservation(ctx, instance, nil, "connected", "api", "instance connect queued", nil)
 	return instance, nil
 }
 
@@ -182,6 +189,7 @@ func (s *Service) Disconnect(ctx context.Context, tenantID, reference string) (*
 			}
 			return nil, runtimeErr
 		}
+		s.recordRuntimeObservation(ctx, instance, snapshot, "disconnected", "api", "instance disconnected", nil)
 		return s.applySnapshot(ctx, instance, snapshot)
 	} else if ensureErr != nil && s.logger != nil {
 		s.logger.Warn("disconnect runtime unavailable, using local status only", "instance_id", instance.ID, "reference", reference, "error", ensureErr)
@@ -191,6 +199,7 @@ func (s *Service) Disconnect(ctx context.Context, tenantID, reference string) (*
 	if err := s.repo.Update(ctx, instance); err != nil {
 		return nil, err
 	}
+	s.recordRuntimeObservation(ctx, instance, nil, "disconnected", "api", "instance disconnected", nil)
 	return instance, nil
 }
 
@@ -208,6 +217,7 @@ func (s *Service) DisconnectByID(ctx context.Context, tenantID, instanceID strin
 			}
 			return nil, runtimeErr
 		}
+		s.recordRuntimeObservation(ctx, instance, snapshot, "disconnected", "api", "instance disconnected", nil)
 		return s.applySnapshot(ctx, instance, snapshot)
 	} else if ensureErr != nil && s.logger != nil {
 		s.logger.Warn("disconnect runtime unavailable, using local status only", "instance_id", instance.ID, "error", ensureErr)
@@ -217,6 +227,7 @@ func (s *Service) DisconnectByID(ctx context.Context, tenantID, instanceID strin
 	if err := s.repo.Update(ctx, instance); err != nil {
 		return nil, err
 	}
+	s.recordRuntimeObservation(ctx, instance, nil, "disconnected", "api", "instance disconnected", nil)
 	return instance, nil
 }
 
@@ -242,6 +253,7 @@ func (s *Service) Reconnect(ctx context.Context, tenantID, reference string) (*r
 		return instance, nil, runtimeErr
 	}
 
+	s.recordRuntimeObservation(ctx, instance, snapshot, "reconnect_requested", "api", "instance reconnect queued", nil)
 	instance, err = s.applySnapshot(ctx, instance, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -271,6 +283,7 @@ func (s *Service) ReconnectByID(ctx context.Context, tenantID, instanceID string
 		return instance, nil, runtimeErr
 	}
 
+	s.recordRuntimeObservation(ctx, instance, snapshot, "reconnect_requested", "api", "instance reconnect queued", nil)
 	instance, err = s.applySnapshot(ctx, instance, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -300,6 +313,7 @@ func (s *Service) Logout(ctx context.Context, tenantID, reference string) (*repo
 		return instance, nil, runtimeErr
 	}
 
+	s.recordRuntimeObservation(ctx, instance, snapshot, "logout", "api", "instance logged out", nil)
 	instance, err = s.applySnapshot(ctx, instance, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -329,6 +343,7 @@ func (s *Service) LogoutByID(ctx context.Context, tenantID, instanceID string) (
 		return instance, nil, runtimeErr
 	}
 
+	s.recordRuntimeObservation(ctx, instance, snapshot, "logout", "api", "instance logged out", nil)
 	instance, err = s.applySnapshot(ctx, instance, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -350,7 +365,7 @@ func (s *Service) Status(ctx context.Context, tenantID, reference string) (*repo
 	if runtimeErr != nil {
 		return instance, nil
 	}
-
+	s.recordRuntimeObservation(ctx, instance, snapshot, "status_observed", "runtime_snapshot", "live runtime status observed", nil)
 	return s.applySnapshot(ctx, instance, snapshot)
 }
 
@@ -368,7 +383,7 @@ func (s *Service) StatusByID(ctx context.Context, tenantID, instanceID string) (
 	if runtimeErr != nil {
 		return instance, nil
 	}
-
+	s.recordRuntimeObservation(ctx, instance, snapshot, "status_observed", "runtime_snapshot", "live runtime status observed", nil)
 	return s.applySnapshot(ctx, instance, snapshot)
 }
 
@@ -427,6 +442,7 @@ func (s *Service) Pair(ctx context.Context, tenantID, reference string, input Pa
 	if err != nil {
 		return nil, nil, err
 	}
+	s.recordRuntimeObservation(ctx, instance, snapshot, "pairing_started", "api", "pairing code generated", nil)
 	return instance, snapshot, nil
 }
 
@@ -456,7 +472,70 @@ func (s *Service) PairByID(ctx context.Context, tenantID, instanceID string, inp
 	if err != nil {
 		return nil, nil, err
 	}
+	s.recordRuntimeObservation(ctx, instance, snapshot, "pairing_started", "api", "pairing code generated", nil)
 	return instance, snapshot, nil
+}
+
+func (s *Service) RuntimeStatus(ctx context.Context, tenantID, reference string) (*repository.Instance, *repository.RuntimeSessionState, *RuntimeSnapshot, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	state, err := s.loadRuntimeState(ctx, instance)
+	if err != nil {
+		return instance, nil, nil, err
+	}
+	snapshot := s.tryRuntimeSnapshot(ctx, instance)
+	if snapshot != nil {
+		s.recordRuntimeObservation(ctx, instance, snapshot, "status_observed", "runtime_snapshot", "live runtime status observed", nil)
+		if latest, latestErr := s.loadRuntimeState(ctx, instance); latestErr == nil && latest != nil {
+			state = latest
+		}
+	}
+	return instance, state, snapshot, nil
+}
+
+func (s *Service) RuntimeStatusByID(ctx context.Context, tenantID, instanceID string) (*repository.Instance, *repository.RuntimeSessionState, *RuntimeSnapshot, error) {
+	instance, err := s.Get(ctx, tenantID, instanceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	state, err := s.loadRuntimeState(ctx, instance)
+	if err != nil {
+		return instance, nil, nil, err
+	}
+	snapshot := s.tryRuntimeSnapshot(ctx, instance)
+	if snapshot != nil {
+		s.recordRuntimeObservation(ctx, instance, snapshot, "status_observed", "runtime_snapshot", "live runtime status observed", nil)
+		if latest, latestErr := s.loadRuntimeState(ctx, instance); latestErr == nil && latest != nil {
+			state = latest
+		}
+	}
+	return instance, state, snapshot, nil
+}
+
+func (s *Service) RuntimeHistory(ctx context.Context, tenantID, reference string, limit int) (*repository.Instance, []repository.RuntimeSessionEvent, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := s.listRuntimeEvents(ctx, instance, limit)
+	if err != nil {
+		return instance, nil, err
+	}
+	return instance, events, nil
+}
+
+func (s *Service) RuntimeHistoryByID(ctx context.Context, tenantID, instanceID string, limit int) (*repository.Instance, []repository.RuntimeSessionEvent, error) {
+	instance, err := s.Get(ctx, tenantID, instanceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := s.listRuntimeEvents(ctx, instance, limit)
+	if err != nil {
+		return instance, nil, err
+	}
+	return instance, events, nil
 }
 
 func (s *Service) SetWebhook(ctx context.Context, tenantID, reference, webhookURL string, events []string) (*repository.Instance, error) {
@@ -1302,7 +1381,108 @@ func (s *Service) applySnapshot(ctx context.Context, instance *repository.Instan
 		}
 	}
 
+	s.recordRuntimeObservation(ctx, instance, snapshot, "status_observed", "runtime_snapshot", "live runtime status observed", nil)
 	return instance, nil
+}
+
+func (s *Service) loadRuntimeState(ctx context.Context, instance *repository.Instance) (*repository.RuntimeSessionState, error) {
+	if instance == nil || s.observability == nil {
+		return nil, nil
+	}
+	return s.observability.GetState(ctx, instance.TenantID, instance.ID)
+}
+
+func (s *Service) listRuntimeEvents(ctx context.Context, instance *repository.Instance, limit int) ([]repository.RuntimeSessionEvent, error) {
+	if instance == nil || s.observability == nil {
+		return []repository.RuntimeSessionEvent{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	return s.observability.ListEvents(ctx, instance.TenantID, instance.ID, repository.RuntimeSessionEventFilter{Limit: limit})
+}
+
+func (s *Service) tryRuntimeSnapshot(ctx context.Context, instance *repository.Instance) *RuntimeSnapshot {
+	runtime, _ := s.ensureRuntime()
+	if runtime == nil || instance == nil {
+		return nil
+	}
+	snapshot, err := runtime.Snapshot(ctx, instance)
+	if err != nil {
+		return nil
+	}
+	return snapshot
+}
+
+func (s *Service) recordRuntimeObservation(ctx context.Context, instance *repository.Instance, snapshot *RuntimeSnapshot, eventType, source, message string, err error) {
+	if instance == nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	status := firstStatus(strings.TrimSpace(instance.Status), "created")
+	connected := status == "open" || status == "connected"
+	loggedIn := connected
+	pairingActive := status == "qrcode" || status == "connecting"
+	disconnectReason := ""
+	errorMessage := ""
+
+	if snapshot != nil {
+		status = firstStatus(strings.TrimSpace(snapshot.Status), status)
+		connected = snapshot.Connected
+		loggedIn = snapshot.LoggedIn
+		pairingActive = !snapshot.LoggedIn && (strings.TrimSpace(snapshot.QRCode) != "" || strings.TrimSpace(snapshot.PairingCode) != "" || status == "qrcode" || status == "connecting")
+	}
+	if strings.TrimSpace(eventType) == "logout" || strings.TrimSpace(eventType) == "disconnected" {
+		connected = false
+		loggedIn = false
+		pairingActive = false
+		if strings.TrimSpace(eventType) == "logout" && status == "open" {
+			status = "close"
+		}
+	}
+	if err != nil {
+		errorMessage = strings.TrimSpace(err.Error())
+	}
+
+	runtimeobs.NotifyLifecycleEvent(runtimeobs.LifecycleEvent{
+		InstanceID:       instance.ID,
+		EventType:        strings.TrimSpace(eventType),
+		EventSource:      firstStatus(source, "api"),
+		Status:           status,
+		Connected:        connected,
+		LoggedIn:         loggedIn,
+		PairingActive:    pairingActive,
+		DisconnectReason: disconnectReason,
+		ErrorMessage:     errorMessage,
+		Message:          strings.TrimSpace(message),
+		Payload:          runtimeObservationPayload(snapshot),
+		OccurredAt:       now,
+	})
+}
+
+func runtimeObservationPayload(snapshot *RuntimeSnapshot) map[string]any {
+	if snapshot == nil {
+		return nil
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil
+	}
+	decoded := make(map[string]any)
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return nil
+	}
+	return decoded
+}
+
+func firstStatus(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (s *Service) ensureRuntime() (Runtime, error) {

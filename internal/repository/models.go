@@ -83,6 +83,48 @@ type ConversationMessage struct {
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
+type RuntimeSessionState struct {
+	ID                 string     `json:"id" gorm:"type:uuid;primaryKey"`
+	TenantID           string     `json:"tenant_id" gorm:"type:uuid;index:idx_runtime_session_state_lookup,priority:1;not null;uniqueIndex:idx_runtime_session_state_instance,priority:1"`
+	InstanceID         string     `json:"instance_id" gorm:"type:uuid;index:idx_runtime_session_state_lookup,priority:2;not null;uniqueIndex:idx_runtime_session_state_instance,priority:2"`
+	Status             string     `json:"status" gorm:"size:50;not null;default:'created'"`
+	LastSeenStatus     string     `json:"last_seen_status" gorm:"size:50;not null;default:'created'"`
+	LastEventType      string     `json:"last_event_type" gorm:"size:100;not null;default:'created'"`
+	LastEventSource    string     `json:"last_event_source" gorm:"size:50;not null;default:'system'"`
+	Connected          bool       `json:"connected" gorm:"not null;default:false"`
+	LoggedIn           bool       `json:"logged_in" gorm:"not null;default:false"`
+	PairingActive      bool       `json:"pairing_active" gorm:"not null;default:false"`
+	DisconnectReason   string     `json:"disconnect_reason" gorm:"size:255"`
+	LastError          string     `json:"last_error" gorm:"type:text"`
+	LastEventAt        *time.Time `json:"last_event_at"`
+	LastSeenAt         *time.Time `json:"last_seen_at"`
+	LastConnectedAt    *time.Time `json:"last_connected_at"`
+	LastDisconnectedAt *time.Time `json:"last_disconnected_at"`
+	LastPairedAt       *time.Time `json:"last_paired_at"`
+	LastLogoutAt       *time.Time `json:"last_logout_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+type RuntimeSessionEvent struct {
+	ID               string    `json:"id" gorm:"type:uuid;primaryKey"`
+	TenantID         string    `json:"tenant_id" gorm:"type:uuid;index:idx_runtime_session_events_lookup,priority:1;not null"`
+	InstanceID       string    `json:"instance_id" gorm:"type:uuid;index:idx_runtime_session_events_lookup,priority:2;not null"`
+	EventType        string    `json:"event_type" gorm:"size:100;index:idx_runtime_session_events_lookup,priority:3;not null"`
+	EventSource      string    `json:"event_source" gorm:"size:50;not null"`
+	Status           string    `json:"status" gorm:"size:50;not null"`
+	Connected        bool      `json:"connected" gorm:"not null;default:false"`
+	LoggedIn         bool      `json:"logged_in" gorm:"not null;default:false"`
+	PairingActive    bool      `json:"pairing_active" gorm:"not null;default:false"`
+	DisconnectReason string    `json:"disconnect_reason" gorm:"size:255"`
+	ErrorMessage     string    `json:"error_message" gorm:"type:text"`
+	Message          string    `json:"message" gorm:"type:text"`
+	Payload          string    `json:"payload" gorm:"type:text"`
+	OccurredAt       time.Time `json:"occurred_at" gorm:"index:idx_runtime_session_events_lookup,priority:4;not null"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type Contact struct {
 	ID         string `gorm:"type:uuid;primaryKey"`
 	TenantID   string `gorm:"type:uuid;uniqueIndex:idx_contacts_tenant_phone;index;not null"`

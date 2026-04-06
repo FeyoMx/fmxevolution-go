@@ -56,6 +56,14 @@
   - plus `/instance/id/:instanceID/*` aliases
 - Added compatibility-envelope runtime action responses so reconnect/pair/logout can double as frontend status refresh payloads
 - Kept logout honest to bridge guarantees by returning an error when no active logged-in runtime session exists instead of faking deeper parity
+- Added durable runtime observability with persisted per-instance runtime state plus lifecycle event history
+- Added tenant-safe runtime observability routes on:
+  - `/instance/:id/runtime`
+  - `/instance/:id/runtime/history`
+  - plus `/instance/id/:instanceID/*` aliases
+- Added normalized lifecycle persistence for `connected`, `disconnected`, `pairing_started`, `paired`, `reconnect_requested`, `logout`, and `status_observed`
+- Added bridge lifecycle publishers from WhatsMeow into the SaaS runtime observability model
+- Added inbound webhook fallback publishing into the chat-history registry to improve inbound persistence reliability when webhook dispatch carries enough message metadata
 
 ### Configuration and examples
 
@@ -72,3 +80,4 @@
 - Added `docs/backend-product-readiness.md` as a practical backend readiness snapshot
 - Added `docs/backend-parity-report.md` and `docs/backend-parity-plan.md` for phased parity work
 - Message-history parity is now usable, but inbound completeness is still partial because there is no backfill from older sessions or full upstream replay into the SaaS read model
+- Durable runtime status/history reads no longer require the live bridge, but live snapshots and connection actions still do

@@ -23,10 +23,23 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 
 - tenant-scoped instance CRUD
 - connect, disconnect, reconnect, pair, logout, status, and QR flows through the legacy runtime bridge
+- durable runtime session state plus lifecycle event history for instance UX
+- tenant-safe runtime observability routes on:
+  - `GET /instance/:id/runtime`
+  - `GET /instance/:id/runtime/history`
+  - plus `/instance/id/:instanceID/*` aliases
 - advanced settings bridge
 - webhook sync and compatibility response shaping
 - runtime admin actions return compatibility envelopes with refreshed status fields so the frontend can use the action response as an immediate operational refresh
 - SaaS runtime admin parity is mounted only on tenant-scoped `/instance/:id` and `/instance/id/:instanceID` routes; unsafe legacy global handlers remain unexposed
+- durable lifecycle records now capture:
+  - `connected`
+  - `disconnected`
+  - `pairing_started`
+  - `paired`
+  - `reconnect_requested`
+  - `logout`
+  - `status_observed`
 
 ### Messaging work completed in this branch
 
@@ -51,6 +64,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - introduced a persisted `ConversationMessage` read model scoped by tenant, instance, and `remoteJid`
 - persisted outbound text, media, and audio sends into that read model
 - wired inbound runtime message events and delivery receipts into the same read model where the active bridge can safely provide them
+- added an inbound webhook fallback path that also publishes into the conversation history registry when enough message metadata is present
 
 ### Connector work already completed
 
@@ -72,8 +86,9 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - inbound history is still partial because there is no backfill from older sessions or full upstream history replay
 - Chatwoot, SQS, and manager-style integration suites remain explicit `501 partial`
 - dashboard metrics still include placeholders
-- runtime parity still depends heavily on the legacy bridge
+- runtime parity still depends heavily on the legacy bridge for live snapshots, QR retrieval, and connection actions
 - logout truthfulness is limited by the live bridge: if there is no active logged-in runtime session, the backend now returns an explicit error instead of faking success
+- durable runtime state is only as complete as the events this SaaS process has observed since the feature was introduced
 
 ## Files changed in this wave
 
@@ -84,7 +99,16 @@ High-signal files updated for this phase include:
 - `internal/instance/integration_handler.go`
 - `internal/instance/runtime.go`
 - `internal/instance/service.go`
+- `internal/repository/gorm.go`
+- `internal/repository/interfaces.go`
+- `internal/repository/models.go`
 - `internal/server/server.go`
+- `internal/service/app.go`
+- `internal/webhook/service.go`
+- `internal/webhook/service_test.go`
+- `migrations/000001_saas_core.sql`
+- `pkg/runtimeobs/registry.go`
+- `pkg/whatsmeow/service/whatsmeow.go`
 - `docs/backend-api.md`
 - `docs/backend-parity-report.md`
 - `docs/backend-parity-plan.md`

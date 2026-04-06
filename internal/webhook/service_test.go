@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
+	"github.com/EvolutionAPI/evolution-go/pkg/chathistory"
 )
 
 type webhookRepoMock struct {
@@ -96,6 +98,50 @@ func TestDispatchInboundSignsAndFiltersEndpoints(t *testing.T) {
 	}
 	if receivedPayload["tenant_id"] != "tenant-1" {
 		t.Fatalf("expected tenant payload, got %#v", receivedPayload["tenant_id"])
+	}
+}
+
+func TestDispatchInboundPublishesConversationFallback(t *testing.T) {
+	received := make(chan chathistory.InboundMessage, 1)
+	chathistory.RegisterInboundMessageListener(func(message chathistory.InboundMessage) {
+		if message.InstanceID == "instance-fallback" && message.MessageID == "message-fallback" {
+			select {
+			case received <- message:
+			default:
+			}
+		}
+	})
+
+	service := NewService(webhookRepoMock{}, nilLogger())
+
+	_, err := service.DispatchInbound(context.Background(), "tenant-1", DispatchInput{
+		EventType:  "message.received",
+		InstanceID: "instance-fallback",
+		MessageID:  "message-fallback",
+		Data: map[string]any{
+			"remote_jid":   "5215551234567@s.whatsapp.net",
+			"push_name":    "Alice",
+			"message_type": "conversation",
+			"message":      "hello from webhook",
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch inbound: %v", err)
+	}
+
+	select {
+	case message := <-received:
+		if message.RemoteJID != "5215551234567@s.whatsapp.net" {
+			t.Fatalf("unexpected remote jid: %s", message.RemoteJID)
+		}
+		if message.Body != "hello from webhook" {
+			t.Fatalf("unexpected body: %s", message.Body)
+		}
+		if message.Source != "5215551234567" {
+			t.Fatalf("unexpected source: %s", message.Source)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected inbound conversation fallback notification")
 	}
 }
 

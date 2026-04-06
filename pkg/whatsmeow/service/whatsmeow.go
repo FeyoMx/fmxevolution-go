@@ -47,6 +47,7 @@ import (
 	message_model "github.com/EvolutionAPI/evolution-go/pkg/message/model"
 	message_repository "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
 	poll_service "github.com/EvolutionAPI/evolution-go/pkg/poll/service"
+	"github.com/EvolutionAPI/evolution-go/pkg/runtimeobs"
 	"github.com/EvolutionAPI/evolution-go/pkg/sendstatus"
 	storage_interfaces "github.com/EvolutionAPI/evolution-go/pkg/storage/interfaces"
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
@@ -165,6 +166,23 @@ func hasMediaStorage(storage storage_interfaces.MediaStorage) bool {
 	default:
 		return true
 	}
+}
+
+func notifyRuntimeLifecycle(instanceID, eventType, status, message string, connected, loggedIn, pairingActive bool, disconnectReason, errorMessage string, payload map[string]any) {
+	runtimeobs.NotifyLifecycleEvent(runtimeobs.LifecycleEvent{
+		InstanceID:       strings.TrimSpace(instanceID),
+		EventType:        strings.TrimSpace(eventType),
+		EventSource:      "bridge",
+		Status:           strings.TrimSpace(status),
+		Connected:        connected,
+		LoggedIn:         loggedIn,
+		PairingActive:    pairingActive,
+		DisconnectReason: strings.TrimSpace(disconnectReason),
+		ErrorMessage:     strings.TrimSpace(errorMessage),
+		Message:          strings.TrimSpace(message),
+		Payload:          payload,
+		OccurredAt:       time.Now().UTC(),
+	})
 }
 
 func notifyInboundConversationHistory(instanceID string, evt *events.Message, parsedMessageType string, dataMap map[string]interface{}) {
@@ -719,6 +737,12 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 			for evt := range qrChan {
 				w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("[%s] Received QR code event %s", cd.Instance.Id, evt.Event)
 				if evt.Event == "code" {
+					notifyRuntimeLifecycle(cd.Instance.Id, "pairing_started", "qrcode", "qr code generated", false, false, true, "", "", map[string]any{
+						"code":     evt.Code,
+						"count":    mycli.qrcodeCount + 1,
+						"maxCount": w.config.QrcodeMaxCount,
+					})
+
 					// Incrementar contador de QR codes
 					mycli.qrcodeCount++
 
@@ -1034,6 +1058,10 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.Connected, *events.PushNameSetting:
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] events.Connected to Whatsapp for user '%s'", mycli.userID, mycli.WAClient.Store.PushName)
 		if len(mycli.WAClient.Store.PushName) > 0 {
+			notifyRuntimeLifecycle(mycli.userID, "connected", "open", "client connected", true, true, false, "", "", map[string]any{
+				"jid":       mycli.WAClient.Store.ID.String(),
+				"push_name": mycli.WAClient.Store.PushName,
+			})
 			doWebhook = true
 			postMap["event"] = "Connected"
 
@@ -1098,6 +1126,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 	case *events.PairSuccess:
+		notifyRuntimeLifecycle(mycli.userID, "paired", "open", "pairing completed", true, true, false, "", "", map[string]any{
+			"jid": evt.ID.String(),
+		})
 		doWebhook = true
 		postMap["event"] = "PairSuccess"
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("QR Pair Success for user '%s' with JID '%s' - '%s'", mycli.userID, evt.ID.String(), mycli.WAClient.Store.ID.String())
@@ -1795,6 +1826,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.AppState:
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] App state event received %+v", mycli.userID, evt)
 	case *events.LoggedOut:
+		notifyRuntimeLifecycle(mycli.userID, "logout", "close", "client logged out", false, false, false, evt.Reason.String(), "", map[string]any{
+			"reason": evt.Reason.String(),
+		})
 		doWebhook = true
 		postMap["event"] = "LoggedOut"
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Logged out for reason %s", mycli.userID, evt.Reason.String())
@@ -1914,6 +1948,9 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		doWebhook = true
 		postMap["event"] = "OfflineSyncCompleted"
 	case *events.ConnectFailure:
+		notifyRuntimeLifecycle(mycli.userID, "status_observed", "close", "connection failed", false, false, false, evt.Reason.String(), evt.Reason.String(), map[string]any{
+			"reason": evt.Reason.String(),
+		})
 		doWebhook = true
 		postMap["event"] = "ConnectFailure"
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Connection failed with reason %s", mycli.userID, evt.Reason.String())
@@ -1929,6 +1966,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Error updating instance: %s", mycli.Instance.Id, err)
 		}
 	case *events.Disconnected:
+		notifyRuntimeLifecycle(mycli.userID, "disconnected", "close", "client disconnected", false, false, false, "Disconnected emitted because the websocket is closed by the server.", "", nil)
 		doWebhook = true
 		postMap["event"] = "Disconnected"
 
