@@ -1,27 +1,29 @@
 # Backend Product Readiness
 
-Audited on 2026-04-02.
+Audited on 2026-04-05.
 
-This summary reflects the current backend mounted by `cmd/api` and `internal/server/server.go`. The backend is product-usable for tenant auth, tenant-scoped instance management, CRM contacts, webhook management, and a subset of instance integrations. It is not yet a fully standalone WhatsApp platform because several capabilities still depend on the legacy runtime bridge in `pkg/*`, and many legacy integration surfaces are intentionally registered as `501 partial`.
+This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, webhook dispatch, CRM, text sending, media sending, audio sending, and a live chat list. It is not yet full Evolution Go / Manager parity because message-history search, several manager integration pages, and some runtime/admin surfaces remain partial or unsupported.
 
 ## Overall Readiness
 
-Current backend maturity: partial but usable.
+Current backend maturity: usable, with explicit partials.
 
 Strong areas:
 
-- tenant auth and tenancy enforcement
-- tenant-scoped instance CRUD and runtime lifecycle
-- webhook endpoint management and dispatch
+- tenant auth, JWT, API key, and legacy instance-token compatibility
+- tenant-scoped instance CRUD, connect, disconnect, QR, status, and advanced settings
+- text sending with async delivery tracking
+- media and audio sending through the legacy runtime bridge
+- webhook management and tenant-safe dispatch
+- websocket, rabbitmq, and proxy instance settings
 - CRM contacts/tags/notes
-- basic AI settings and event-driven AI reply generation
 
 Main gaps:
 
-- many legacy integration suites are explicit partials
-- broadcast and AI do not directly send WhatsApp messages
-- some metrics and infra abstractions are placeholders
-- the SaaS API still depends on the legacy engine for core real-time instance behavior
+- no tenant-safe message-history store for `Message[]` search parity
+- manager-style integration suites still return explicit `501 partial`
+- dashboard metrics still contain placeholder counters
+- runtime parity still depends on the legacy bridge in `pkg/*`
 
 ## Fully Implemented Routes and Features
 
@@ -39,10 +41,10 @@ Implemented routes:
 
 Readiness notes:
 
-- JWT access and refresh token flow is implemented.
+- JWT access and refresh flow is implemented.
 - Tenant API key auth is implemented.
-- Tenant middleware and role checks are implemented.
-- Legacy instance token fallback auth is implemented for compatibility.
+- Legacy instance token fallback auth is implemented.
+- Tenant scoping is enforced by auth plus tenant middleware.
 
 ### Dashboard
 
@@ -52,8 +54,8 @@ Implemented route:
 
 Readiness notes:
 
-- Route is live and returns instance counts correctly.
-- Several non-instance counters are placeholders, so the route is implemented but only partially trustworthy as a product analytics surface.
+- Instance counters are real.
+- Several other counters are placeholders, so this route is implemented but not yet full analytics parity.
 
 ### AI
 
@@ -66,14 +68,11 @@ Implemented routes:
 
 Readiness notes:
 
-- Tenant AI config storage is implemented.
-- Per-instance AI enablement and auto-reply flags are implemented.
-- Inbound webhook events can enqueue AI processing.
-- Conversation memory is stored.
-- OpenAI-compatible completion calls are implemented.
-- Generated replies are emitted as outbound webhook events.
+- Tenant AI settings and per-instance toggles are implemented.
+- AI replies are generated and emitted through outbound webhook events.
+- This is still weaker than full manager/runtime bot parity because this SaaS layer does not own all legacy bot CRUD suites.
 
-### Instances
+### Instances and runtime lifecycle
 
 Implemented routes:
 
@@ -99,16 +98,40 @@ Implemented routes:
 - `PUT /instance/:id/advanced-settings`
 - `GET /instance/id/:instanceID/advanced-settings`
 - `PUT /instance/id/:instanceID/advanced-settings`
-- `POST /instance/:id/messages/text`
-- `POST /instance/id/:instanceID/messages/text`
 
 Readiness notes:
 
 - Tenant-scoped instance CRUD is implemented.
-- Connect, disconnect, status, and QR flows are implemented through the legacy runtime bridge.
+- Connect, disconnect, QR, and status are implemented through the legacy runtime bridge.
 - Advanced settings are implemented through the legacy bridge.
-- Text sending is implemented.
-- Compatibility response shaping for older frontend consumers is implemented.
+- Response shaping keeps older frontend consumers working.
+
+### Messaging
+
+Implemented SaaS routes:
+
+- `POST /instance/:id/messages/text`
+- `GET /instance/:id/messages/text/:jobID`
+- `POST /instance/id/:instanceID/messages/text`
+- `GET /instance/id/:instanceID/messages/text/:jobID`
+- `POST /instance/:id/messages/media`
+- `POST /instance/:id/messages/audio`
+- `POST /instance/:id/chats/search`
+
+Implemented compatibility routes:
+
+- `POST /message/sendText/:instanceName`
+- `POST /message/sendMedia/:instanceName`
+- `POST /message/sendWhatsAppAudio/:instanceName`
+- `POST /chat/findChats/:instanceName`
+
+Readiness notes:
+
+- Text sending is implemented and job status now tracks `queued`, `running`, `sent`, `delivered`, and `read`.
+- Media sending is implemented through the legacy runtime bridge using JSON base64 payloads or URL payloads.
+- Audio sending is implemented through the legacy runtime bridge and audio conversion path.
+- Chat search is functional as a live runtime-backed list of contacts and groups.
+- Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
 
 ### Instance event connectors and proxy
 
@@ -123,7 +146,7 @@ Implemented routes:
 
 Readiness notes:
 
-- Websocket and RabbitMQ config routes are implemented through the legacy bridge.
+- Websocket and RabbitMQ config are bridged to the legacy runtime model.
 - Proxy config is implemented.
 - Proxy support is currently limited to `socks5`.
 
@@ -138,12 +161,6 @@ Implemented routes:
 - `POST /contacts/:id/notes`
 - `POST /contacts/:id/tags`
 
-Readiness notes:
-
-- Contact CRUD-lite is implemented.
-- Tags and notes are implemented.
-- Tenant scoping and duplicate phone protection are implemented.
-
 ### Broadcast
 
 Implemented routes:
@@ -154,8 +171,8 @@ Implemented routes:
 
 Readiness notes:
 
-- Job creation, tenant scoping, listing, storage, worker loop, retry handling, and pacing are implemented.
-- Product outcome is still partial because the processor is a stub and does not perform WhatsApp delivery.
+- Queueing, tenant scoping, and worker claiming are implemented.
+- Delivery execution is still partial because WhatsApp send-out is still a stub.
 
 ### Webhooks
 
@@ -170,42 +187,61 @@ Implemented routes:
 Readiness notes:
 
 - Tenant-managed webhook endpoint registry is implemented.
-- Dispatch is implemented.
-- Legacy-compatible webhook payload parsing is implemented.
-- Inbound webhook dispatch can trigger the AI pipeline.
+- Dispatch and inbound AI trigger flow are implemented.
 
-## Partial and `501` Routes
+## Partially Matched Features
 
-These routes are intentionally mounted and return structured `501 partial` responses instead of pretending to work.
+These areas are functional enough to be mounted, but they are not full upstream parity yet.
 
-### Partial chat surface
+### Chat list parity
+
+Functional routes:
 
 - `POST /instance/:id/chats/search`
+- `POST /chat/findChats/:instanceName`
+
+Current limitations:
+
+- live runtime contacts/groups only
+- no tenant-safe persisted chat table
+- no true last-message preview parity
+- labels are not sourced from a SaaS chat repository
+
+### Dashboard analytics parity
+
+Functional route:
+
+- `GET /dashboard/metrics`
+
+Current limitations:
+
+- only instance counters are trustworthy
+- contact/message/revenue-style analytics are not implemented
+
+### AI parity
+
+Functional routes exist for tenant and instance AI settings, but these do not replace the legacy manager’s OpenAI/Typebot/Dify/N8N/EvoAI/EvolutionBot/Flowise CRUD suites.
+
+## Explicit Partial and `501` Routes
+
+These routes are intentionally mounted and still return structured `501 partial` responses.
+
+### Message history search
+
 - `POST /instance/:id/messages/search`
-- `POST /instance/:id/messages/media`
-- `POST /instance/:id/messages/audio`
+- `POST /chat/findMessages/:instanceName`
 
 Current blockers:
 
-- no tenant-safe SaaS chat/message repository matching the legacy frontend contracts
-- media and audio sending not yet wired into the SaaS instance service
-- only text sending is currently supported
+- no tenant-safe message-history repository matching the legacy `Message[]` contract
+- no safe durable replay/query layer for full chat history in the SaaS backend
 
-### Partial connector surface
+### Connector and manager integration surfaces
 
 - `GET /instance/:id/sqs`
 - `PUT /instance/:id/sqs`
 - `GET /instance/:id/chatwoot`
 - `PUT /instance/:id/chatwoot`
-
-Current blockers:
-
-- no tenant-safe repository/runtime support in the SaaS layer
-
-### Partial integration suites
-
-All of the following are intentionally unsupported today and return `501 partial`:
-
 - `GET/POST /instance/:id/openai`
 - `GET/PUT/DELETE /instance/:id/openai/:resourceId`
 - `GET/PUT /instance/:id/openai/settings`
@@ -242,66 +278,32 @@ All of the following are intentionally unsupported today and return `501 partial
 - `GET /instance/:id/flowise/:resourceId/sessions`
 - `POST /instance/:id/flowise/status`
 
-Shared blocker:
+## Unsupported or Still Missing Areas
 
-- the current backend does not have tenant-safe repository and runtime support for these legacy integration models
+These capabilities are still missing from the active SaaS surface even though they exist upstream or in legacy manager expectations:
 
-## Unsupported Areas
-
-The following areas are effectively unsupported from a product perspective, even when related route names exist:
-
-- direct WhatsApp sending for AI-generated replies
-- direct WhatsApp broadcast delivery
-- tenant-safe legacy chat history and message search
-- media and audio sending from the SaaS instance routes
-- Chatwoot, SQS, OpenAI resource CRUD, Typebot, Dify, N8N, EvoAI, Evolution Bot, and Flowise integration management
-- tenant quotas, billing, and usage accounting
-- persistent metrics aggregation beyond simple live instance counts
-- Redis-backed rate limiting
-- standalone SaaS runtime independence from the legacy engine
-
-Also unsupported or stale around developer/product operations:
-
-- generated Swagger docs under `docs/` do not match the mounted `cmd/api` routes
-- SQL migrations exist as reference, but startup still relies on GORM auto-migration rather than a real migration runner
+- explicit pair route parity (`/instance/pair` style flow)
+- reconnect/logout runtime admin routes on the SaaS surface
+- Kafka connector parity
+- tenant-safe Chatwoot storage and runtime wiring
+- tenant-safe CRUD for OpenAI, Typebot, Dify, N8N, EvoAI, EvolutionBot, and Flowise
+- full message-history query/search parity
+- full broadcast-to-WhatsApp execution
+- trustworthy product analytics beyond instance counts
 
 ## Known Technical Debt
 
-- Hybrid architecture debt: the new SaaS API still depends on `pkg/*` legacy runtime code for connect, disconnect, QR, status, webhook sync, and advanced settings.
-- Runtime bridge coupling: if the legacy runtime cannot initialize, important instance lifecycle features degrade or become unavailable.
-- Data model split: advanced settings live in the legacy instance model instead of the SaaS `instances` table.
-- Broadcast debt: the queue, retries, and workers exist, but delivery uses a no-op processor stub.
-- AI debt: AI generation works, but the result stops at webhook emission instead of sending a WhatsApp reply.
-- Metrics debt: dashboard metrics mix real instance counts with placeholder zeros.
-- Rate-limit backend debt: `redis` is only a placeholder and currently falls back to memory behavior.
-- Auth/session debt: refresh tokens are stateless and not revocable; logout is only an acknowledgement response.
-- Migration debt: `gorm.AutoMigrate` is the real startup path, while `migrations/000001_saas_core.sql` is not executed automatically.
-- Documentation debt: stale swagger artifacts can mislead frontend and QA work.
-- Compatibility debt: several response shims and legacy token aliases are still required to keep older clients working.
+- core runtime behavior still depends on the legacy bridge in `pkg/*`
+- message history is still not modeled as a tenant-safe SaaS repository
+- many manager integration suites are represented only as explicit `501` placeholders
+- dashboard metrics still contain placeholders
+- Swagger artifacts remain stale relative to `cmd/api`
+- current media/audio implementation is intentionally scoped to JSON payloads used by the current frontend, not every upstream transport shape
 
 ## Next Recommended Backend Priorities
 
-1. Replace the broadcast processor stub with real WhatsApp delivery through the instance runtime.
-2. Finish AI auto-reply by sending generated replies through the runtime instead of only emitting webhook events.
-3. Decide which instance integrations are true product priorities and either implement tenant-safe support or remove/deprecate the `501` surfaces from active product scope.
-4. Implement tenant-safe media and audio sending, then decide whether chat/message search belongs in SaaS storage or should remain explicitly unsupported.
-5. Reduce dependency on the legacy runtime by moving more instance state and settings into the SaaS-owned data model.
-6. Replace `AutoMigrate`-only startup with an actual migration workflow and make schema evolution deterministic.
-7. Refresh or regenerate Swagger/OpenAPI docs from the mounted `cmd/api` routes.
-8. Implement real metrics aggregation so dashboard counters are product-credible.
-9. Add a real Redis-backed rate-limit store if multi-instance deployment is a target.
-10. Add refresh-token revocation/session tracking if security and admin controls matter for production rollout.
-
-## Product Conclusion
-
-The backend is ready for limited SaaS workflows today:
-
-- tenant signup and login
-- tenant-scoped instance administration
-- connect/QR/status flows
-- text sending
-- webhook management
-- CRM contact management
-- early AI and broadcast orchestration
-
-It is not yet ready to claim full parity with the legacy platform or to market the full integration catalog as supported. The biggest product risks are the number of intentional `501` surfaces, placeholder metrics, and the continued dependence on the legacy runtime for core instance behavior.
+1. Implement tenant-safe message history persistence or a safe read-model, then replace `messages/search` partials.
+2. Add runtime parity for reconnect/logout/pairing flows needed by manager-level lifecycle UX.
+3. Decide which manager integration suites are true product priorities and implement only those with tenant-safe repositories.
+4. Replace placeholder dashboard metrics with real aggregates or label them partial in UI.
+5. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.

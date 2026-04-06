@@ -1,147 +1,113 @@
 # Backend Worklog
 
-## Scope audited
+## Scope
 
-This worklog reflects the current branch/worktree state as audited from the backend repository on `main`, with special attention to the new SaaS API surface under `cmd/api`, `internal/`, and `migrations/`.
+This worklog reflects the current SaaS backend worktree under `cmd/api`, `internal/*`, and the legacy bridge dependencies under `pkg/*`.
 
-## What changed
+## Current branch highlights
 
-### New SaaS backend surface
+### SaaS backend foundation already in place
 
-- Added `cmd/api/main.go` as a second backend entry point
-- Added `internal/*` application modules for:
-  - auth
-  - tenancy
-  - instances
-  - CRM
-  - webhooks
-  - AI
-  - broadcasts
-  - middleware
-  - dashboard metrics
-  - repository/store layer
-  - application wiring
-- Added `migrations/000001_saas_core.sql`
+- `cmd/api/main.go` runs the tenant-aware backend
+- `internal/*` contains auth, tenancy, instances, CRM, webhooks, AI, broadcast, middleware, repositories, and server wiring
+- `migrations/000001_saas_core.sql` exists as the SQL baseline
 
 ### Auth and tenancy
 
-- Added JWT access and refresh tokens
-- Added tenant API key auth
-- Added tenant middleware and role checks
-- Added legacy instance token fallback auth
+- JWT access and refresh flow
+- tenant API key auth
+- role checks for `owner`, `admin`, and `agent`
+- legacy instance-token compatibility mapped back to tenant identity
 
-### Instance/runtime compatibility
+### Runtime bridge and instance lifecycle
 
-- Added SaaS instance CRUD and bridge methods for:
-  - connect
-  - disconnect
-  - status
-  - QR code
-  - webhook sync
-  - advanced settings sync
-- Added response normalization so frontends can consume both:
-  - `response.data`
-  - `response.data.data`
+- tenant-scoped instance CRUD
+- connect, disconnect, status, and QR flows through the legacy runtime bridge
+- advanced settings bridge
+- webhook sync and compatibility response shaping
 
-### Webhooks and AI
+### Messaging work completed in this branch
 
-- Added tenant webhook endpoint management
-- Added inbound/outbound dispatch routes
-- Added legacy-compatible webhook payload parsing
-- Added AI settings, memory storage, worker queue, OpenAI-compatible reply generation, and outbound webhook emission for generated replies
+- stabilized backend text delivery
+- added queued text-job status with `queued`, `running`, `sent`, `delivered`, and `read`
+- improved delivery receipt tracking
+- added runtime recipient resolution before text send
+- implemented tenant-safe SaaS media sending on:
+  - `POST /instance/:id/messages/media`
+- implemented tenant-safe SaaS audio sending on:
+  - `POST /instance/:id/messages/audio`
+- implemented live runtime-backed chat list on:
+  - `POST /instance/:id/chats/search`
+- added legacy compatibility routes for the current frontend chat composer:
+  - `POST /message/sendText/:instanceName`
+  - `POST /message/sendMedia/:instanceName`
+  - `POST /message/sendWhatsAppAudio/:instanceName`
+  - `POST /chat/findChats/:instanceName`
 
-### Recent fixes in this worktree
+### Connector work already completed
 
-- Guarded duplicate concurrent instance startup in the legacy runtime bridge
-- Added media-storage fallback when MinIO/S3 is flagged on but runtime storage is nil
-- Added webhook payload compatibility for nested legacy webhook objects
-- Added advanced settings routes to persist `ignoreGroups` and `ignoreStatus`
-- Added instance token aliases in instance/status/QR payloads
-- Disabled noisy global webhook usage by allowing empty `WEBHOOK_URL`
-- Added tenant-safe instance-scoped integration routes from the frontend gap report
-- Fully implemented `websocket`, `rabbitmq`, and `proxy` instance routes through the legacy runtime bridge
-- Registered explicit `501 partial` routes for unsupported chat lookup and integration suites instead of reviving legacy `:instanceName` APIs
+- implemented tenant-safe instance routes for:
+  - websocket
+  - rabbitmq
+  - proxy
+- kept unsupported suites explicit as `501 partial` instead of pretending parity
 
-## Why it was changed
+## Why these changes were made
 
-- To introduce a tenant-aware SaaS API without removing the working WhatsApp engine
-- To let frontend code move toward tenant-scoped auth and REST resources
-- To keep older frontend flows alive long enough through compatibility adapters
-- To make webhook and AI flows operational on top of the new tenant model
-- To reduce operational instability from duplicated runtime startup and noisy global webhook fan-out
+- to move the fork toward practical Evolution Go / Manager parity without reviving unsafe global legacy routes
+- to satisfy the current sibling frontend’s real dependencies first
+- to preserve tenant safety and current SaaS architecture
+- to keep unsupported surfaces explicit instead of silently failing or fake-completing them
 
-## Files touched
+## Important remaining gaps
 
-High-signal backend areas touched in this branch/worktree include:
+- full message-history search is still unsupported
+- Chatwoot, SQS, and manager-style integration suites remain explicit `501 partial`
+- dashboard metrics still include placeholders
+- runtime parity still depends heavily on the legacy bridge
 
-- `cmd/api/main.go`
-- `internal/auth/*`
-- `internal/bootstrap/seed.go`
-- `internal/broadcast/*`
-- `internal/config/config.go`
-- `internal/crm/*`
-- `internal/dashboard/handler.go`
-- `internal/instance/*`
-- `internal/middleware/*`
-- `internal/repository/*`
+## Files changed in this wave
+
+High-signal files updated for this phase include:
+
+- `internal/instance/chat_media_types.go`
+- `internal/instance/compat_handler.go`
+- `internal/instance/integration_handler.go`
+- `internal/instance/runtime.go`
+- `internal/instance/service.go`
 - `internal/server/server.go`
-- `internal/service/app.go`
-- `internal/tenant/*`
-- `internal/webhook/*`
-- `migrations/000001_saas_core.sql`
-- `pkg/logger/structured.go`
-- `pkg/whatsmeow/service/whatsmeow.go`
-- `.env.example`
-- `docker/examples/.env.example`
-- `README.md`
-- `CHANGELOG.md`
-- `docs/backend-architecture.md`
 - `docs/backend-api.md`
-- `docs/backend-env.md`
+- `docs/backend-parity-report.md`
+- `docs/backend-parity-plan.md`
+- `docs/backend-product-readiness.md`
 - `docs/backend-worklog.md`
+- `CHANGELOG.md`
 
-## Breaking changes / compatibility notes
+## Consistency notes
 
-- The new SaaS API does not expose the old public/manager route set documented in the legacy README and swagger assets.
-- New protected routes require JWT or tenant API key auth; some frontend paths still assume old unauthenticated or different manager flows.
-- Advanced instance settings now have explicit SaaS routes:
-  - `GET /instance/:id/advanced-settings`
-  - `PUT /instance/:id/advanced-settings`
-- Some older frontend assumptions were handled through compatibility shims:
-  - instance webhook payload formats
-  - status/QR response envelopes
-  - instance token aliases
+### Now more aligned
 
-## Consistency findings
+- backend docs reflect that media and audio sending are no longer `501`
+- backend docs now call out chat-list parity versus message-history parity separately
+- current frontend chat send routes now have explicit backend compatibility routes instead of only SaaS instance routes
 
-### Updated
+### Still intentionally partial
 
-- Root README now matches the current backend architecture instead of the legacy public product positioning
-- Env examples now align with `internal/config` and the legacy bridge config actually read by the code
-- API docs now reflect registered Gin routes from `internal/server/server.go`
+- `POST /instance/:id/messages/search`
+- `POST /chat/findMessages/:instanceName`
+- `GET/PUT /instance/:id/sqs`
+- `GET/PUT /instance/:id/chatwoot`
+- all mounted manager bot/integration suites under:
+  - `openai`
+  - `typebot`
+  - `dify`
+  - `n8n`
+  - `evoai`
+  - `evolutionBot`
+  - `flowise`
 
-### Still partial or stale
+## Verification notes
 
-- `docs/swagger.json`, `docs/swagger.yaml`, and `docs/docs.go` remain stale relative to `cmd/api`
-- broadcast processing is still a stub
-- dashboard metrics include placeholder counters
-- SQL migration file exists, but startup still uses GORM auto-migration
-- most legacy instance integration pages remain partial because the current SaaS backend has no tenant-safe repository/runtime model for Chatwoot, OpenAI bot CRUD, Typebot, Dify, N8N, EvoAI, Evolution Bot, Flowise, SQS, or legacy chat history search
-
-## Follow-up tasks for frontend adaptation
-
-- Move advanced settings toggles to `GET/PUT /instance/:id/advanced-settings`
-- Move instance integration pages to the new `/instance/:id/...` SaaS routes
-- Treat `501` partial integration responses as unsupported UI states instead of generic failures
-- Normalize frontend data access to prefer `response.data.data ?? response.data`
-- Fix routes that concatenate `/manager/...//manager/...`
-- Ensure protected instance/settings queries always use the authenticated Axios client
-- Decide whether dashboard placeholder counters should be hidden or labeled partial in UI
-
-## Suggested commit grouping
-
-1. `docs(backend): document architecture, API and environment`
-2. `feat(backend): expose advanced settings routes for tenant instances`
-3. `fix(backend): harden runtime bridge and legacy compatibility`
-
-These are proposed groupings only; actual staging should keep generated artifacts and local runtime files out of Git.
+- code was reformatted with `gofmt`
+- full `go build -o api2.exe ./cmd/api` verification is currently blocked in this environment by the existing `github.com/chai2010/webp` dependency failing to resolve generated symbols during build
+- that build issue is environment/dependency-level and not isolated to the new instance parity code

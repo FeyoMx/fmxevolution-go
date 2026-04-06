@@ -35,6 +35,15 @@
 - Added advanced settings bridge routes so frontend toggles can persist `ignoreGroups`, `ignoreStatus`, and related legacy instance flags
 - Added guard logic to avoid duplicate concurrent instance startup attempts
 - Added safer media-storage fallback behavior when MinIO is enabled but runtime storage is not initialized
+- Added stable text delivery tracking with queued job status plus delivered/read receipt updates
+- Added tenant-safe media and audio send routes on `/instance/:id/messages/media` and `/instance/:id/messages/audio`
+- Added legacy compatibility send routes for the current frontend:
+  - `/message/sendText/:instanceName`
+  - `/message/sendMedia/:instanceName`
+  - `/message/sendWhatsAppAudio/:instanceName`
+- Added live runtime-backed chat list support on:
+  - `/instance/:id/chats/search`
+  - `/chat/findChats/:instanceName`
 
 ### Configuration and examples
 
@@ -49,3 +58,7 @@
 - Swagger artifacts under `docs/` still represent older/legacy API surfaces and remain out of sync with `cmd/api`
 - The SaaS API still depends on the legacy engine for QR, connection lifecycle, and advanced instance settings
 - Added `docs/backend-product-readiness.md` as a practical backend readiness snapshot
+- Added `docs/backend-parity-report.md` and `docs/backend-parity-plan.md` for phased parity work
+- Message-history search is still explicit partial support on:
+  - `/instance/:id/messages/search`
+  - `/chat/findMessages/:instanceName`
