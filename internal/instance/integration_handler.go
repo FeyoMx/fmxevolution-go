@@ -95,10 +95,20 @@ func (h *Handler) SetProxyConfig(c *gin.Context) {
 }
 
 func (h *Handler) SearchChats(c *gin.Context) {
-	h.writePartialFeature(c, "chat", []string{
-		"tenant-safe chat listing is not available in the current SaaS persistence layer",
-		"the current backend does not store the Chat[] contract required by the legacy frontend",
-	})
+	var input ChatSearchRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		return
+	}
+
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	chats, _, err := h.service.SearchChats(c.Request.Context(), identity.TenantID, c.Param("id"), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, chats)
 }
 
 func (h *Handler) SearchMessages(c *gin.Context) {
@@ -109,17 +119,49 @@ func (h *Handler) SearchMessages(c *gin.Context) {
 }
 
 func (h *Handler) SendMediaMessage(c *gin.Context) {
-	h.writePartialFeature(c, "chat", []string{
-		"media sending is not yet wired into the SaaS instance service",
-		"only text sending is currently supported through /instance/:id/messages/text",
-	})
+	var payload mediaMessageEnvelope
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		return
+	}
+
+	input, err := payload.normalize()
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	result, instance, err := h.service.SendMedia(c.Request.Context(), identity.TenantID, c.Param("id"), *input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildInstanceMessageResponse("media sent successfully", instance, result))
 }
 
 func (h *Handler) SendAudioMessage(c *gin.Context) {
-	h.writePartialFeature(c, "chat", []string{
-		"audio sending is not yet wired into the SaaS instance service",
-		"only text sending is currently supported through /instance/:id/messages/text",
-	})
+	var payload audioMessageEnvelope
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		return
+	}
+
+	input, err := payload.normalize()
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	result, instance, err := h.service.SendAudio(c.Request.Context(), identity.TenantID, c.Param("id"), *input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildInstanceMessageResponse("audio sent successfully", instance, result))
 }
 
 func (h *Handler) GetSQSConfig(c *gin.Context) {

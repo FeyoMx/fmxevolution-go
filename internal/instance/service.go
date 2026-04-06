@@ -37,6 +37,8 @@ type SendTextInput struct {
 	Delay  int32  `json:"delay"`
 }
 
+type SendMediaOutput = SendMediaResult
+
 type SendTextJobStatus = sendstatus.JobStatus
 
 func NewService(repo repository.InstanceRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
@@ -463,6 +465,130 @@ func (s *Service) SendText(ctx context.Context, tenantID, reference string, inpu
 	}
 
 	return message, instance, nil
+}
+
+func (s *Service) SendMedia(ctx context.Context, tenantID, reference string, input resolvedMediaMessageInput) (*SendMediaOutput, *repository.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	input.Number = strings.TrimSpace(input.Number)
+	input.Type = strings.TrimSpace(input.Type)
+	input.URL = strings.TrimSpace(input.URL)
+	input.FileName = strings.TrimSpace(input.FileName)
+	if input.Number == "" || input.Type == "" {
+		return nil, instance, fmt.Errorf("%w: number and media type are required", domain.ErrValidation)
+	}
+	if len(input.FileData) == 0 && input.URL == "" {
+		return nil, instance, fmt.Errorf("%w: media payload or url is required", domain.ErrValidation)
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return nil, instance, ensureErr
+		}
+		return nil, instance, fmt.Errorf("runtime unavailable")
+	}
+
+	legacyRuntime, ok := runtime.(*LegacyRuntime)
+	if !ok {
+		return nil, instance, fmt.Errorf("legacy runtime unavailable")
+	}
+
+	message, err := legacyRuntime.SendMedia(ctx, instance, input)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error(
+				"send media failed",
+				"instance_id", instance.ID,
+				"reference", reference,
+				"number", input.Number,
+				"type", input.Type,
+				"error", err,
+			)
+		}
+		return nil, instance, err
+	}
+
+	return message, instance, nil
+}
+
+func (s *Service) SendAudio(ctx context.Context, tenantID, reference string, input resolvedAudioMessageInput) (*SendMediaOutput, *repository.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	input.Number = strings.TrimSpace(input.Number)
+	if input.Number == "" || len(input.FileData) == 0 {
+		return nil, instance, fmt.Errorf("%w: number and audio payload are required", domain.ErrValidation)
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return nil, instance, ensureErr
+		}
+		return nil, instance, fmt.Errorf("runtime unavailable")
+	}
+
+	legacyRuntime, ok := runtime.(*LegacyRuntime)
+	if !ok {
+		return nil, instance, fmt.Errorf("legacy runtime unavailable")
+	}
+
+	message, err := legacyRuntime.SendAudio(ctx, instance, input)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error(
+				"send audio failed",
+				"instance_id", instance.ID,
+				"reference", reference,
+				"number", input.Number,
+				"error", err,
+			)
+		}
+		return nil, instance, err
+	}
+
+	return message, instance, nil
+}
+
+func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, input ChatSearchRequest) ([]chatSearchRecord, *repository.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return nil, instance, ensureErr
+		}
+		return nil, instance, fmt.Errorf("runtime unavailable")
+	}
+
+	legacyRuntime, ok := runtime.(*LegacyRuntime)
+	if !ok {
+		return nil, instance, fmt.Errorf("legacy runtime unavailable")
+	}
+
+	chats, err := legacyRuntime.SearchChats(ctx, instance, normalizeChatSearchFilter(input))
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error(
+				"search chats failed",
+				"instance_id", instance.ID,
+				"reference", reference,
+				"error", err,
+			)
+		}
+		return nil, instance, err
+	}
+
+	return chats, instance, nil
 }
 
 func (s *Service) QueueSendText(ctx context.Context, tenantID, reference string, input SendTextInput) (string, *repository.Instance, error) {

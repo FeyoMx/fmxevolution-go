@@ -198,14 +198,20 @@ These routes were added from the frontend instance/integration gap report withou
 
 | Method | Path | Roles | Request body | Success response | Status |
 |---|---|---|---|---|---|
-| `POST` | `/instance/:id/messages/text` | owner, admin, agent | `{ number, text, delay? }` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
+| `POST` | `/instance/:id/messages/text` | owner, admin, agent | `{ number, text, delay? }` | async queue response with `job_id`, `delivery_status`, and `status_endpoint` | implemented |
 | `POST` | `/instance/id/:instanceID/messages/text` | owner, admin, agent | same as above | same | implemented |
-| `POST` | `/instance/:id/chats/search` | owner, admin, agent | legacy-compatible search payload | `501` partial response | partial |
+| `GET` | `/instance/:id/messages/text/:jobID` | owner, admin, agent | none | text-job status with `status`, `delivery_status`, `sent`, `delivery_confirmed`, timestamps, `error?`, `message_id?` | implemented |
+| `GET` | `/instance/id/:instanceID/messages/text/:jobID` | owner, admin, agent | none | same as above | implemented |
+| `POST` | `/instance/:id/chats/search` | owner, admin, agent | `{ where? }` | `Chat[]` compatibility list sourced from live contacts/groups | implemented |
 | `POST` | `/instance/:id/messages/search` | owner, admin, agent | legacy-compatible search payload | `501` partial response | partial |
-| `POST` | `/instance/:id/messages/media` | owner, admin, agent | legacy media payload | `501` partial response | partial |
-| `POST` | `/instance/:id/messages/audio` | owner, admin, agent | legacy audio payload | `501` partial response | partial |
+| `POST` | `/instance/:id/messages/media` | owner, admin, agent | media JSON payload, accepts either flat fields or nested `mediaMessage` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
+| `POST` | `/instance/:id/messages/audio` | owner, admin, agent | audio JSON payload, accepts either root `audio` or nested `audioMessage.audio` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
 
-Partial chat routes are registered explicitly so the API reports a truthful unsupported state instead of silently 404ing.
+Notes:
+
+- `chats/search` is now functional, but it is a live runtime-backed list of contacts and groups, not a full persisted chat-history model.
+- `messages/search` stays explicit `501 partial` because the backend still has no tenant-safe message-history repository.
+- media/audio support is currently scoped to the JSON shapes used by the current frontend.
 
 #### Event connectors and proxy
 
@@ -266,6 +272,18 @@ The following routes are intentionally registered and return `501` with a struct
 - `GET/PUT /instance/:id/flowise/settings`
 - `GET /instance/:id/flowise/:resourceId/sessions`
 - `POST /instance/:id/flowise/status`
+
+### Legacy compatibility routes still supported
+
+These routes were added because the current sibling frontend still calls manager-style `:instanceName` paths for chat send/list operations. They remain tenant-scoped because auth uses bearer/API key plus tenant middleware, including legacy instance-token fallback.
+
+| Method | Path | Roles | Request body | Success response | Status |
+|---|---|---|---|---|---|
+| `POST` | `/chat/findChats/:instanceName` | owner, admin, agent | `{ where? }` | same runtime-backed `Chat[]` list as SaaS chat search | implemented |
+| `POST` | `/chat/findMessages/:instanceName` | owner, admin, agent | legacy-compatible message search payload | `501` partial response | partial |
+| `POST` | `/message/sendText/:instanceName` | owner, admin, agent | `{ number, text, options? }` | legacy-style `{ message, data }` success response | implemented |
+| `POST` | `/message/sendMedia/:instanceName` | owner, admin, agent | legacy-compatible media JSON payload | legacy-style `{ message, data }` success response | implemented |
+| `POST` | `/message/sendWhatsAppAudio/:instanceName` | owner, admin, agent | legacy-compatible audio JSON payload | legacy-style `{ message, data }` success response | implemented |
 
 Partial response shape:
 

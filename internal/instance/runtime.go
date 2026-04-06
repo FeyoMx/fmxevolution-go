@@ -1,14 +1,24 @@
 package instance
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime/multipart"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +27,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite"
 
 	pkgconfig "github.com/EvolutionAPI/evolution-go/pkg/config"
@@ -25,14 +36,17 @@ import (
 	rabbitmqProducer "github.com/EvolutionAPI/evolution-go/pkg/events/rabbitmq"
 	webhookProducer "github.com/EvolutionAPI/evolution-go/pkg/events/webhook"
 	websocketProducer "github.com/EvolutionAPI/evolution-go/pkg/events/websocket"
+	legacyGroupService "github.com/EvolutionAPI/evolution-go/pkg/group/service"
 	legacyInstanceModel "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	legacyInstanceRepo "github.com/EvolutionAPI/evolution-go/pkg/instance/repository"
 	legacyInstanceService "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
 	legacyLabelRepo "github.com/EvolutionAPI/evolution-go/pkg/label/repository"
 	legacyLogger "github.com/EvolutionAPI/evolution-go/pkg/logger"
 	legacyMessageRepo "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
+	legacyUserService "github.com/EvolutionAPI/evolution-go/pkg/user/service"
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
 	legacyWhatsmeow "github.com/EvolutionAPI/evolution-go/pkg/whatsmeow/service"
+	"github.com/gabriel-vasile/mimetype"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
@@ -71,6 +85,15 @@ type SendTextResult struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+type SendMediaResult struct {
+	MessageID   string    `json:"messageId"`
+	ServerID    int64     `json:"serverId"`
+	Chat        string    `json:"chat"`
+	FromMe      bool      `json:"fromMe"`
+	Timestamp   time.Time `json:"timestamp"`
+	MessageType string    `json:"messageType"`
+}
+
 const (
 	sendTextTimeout         = 45 * time.Second
 	sendRetryDelay          = 3 * time.Second
@@ -107,6 +130,8 @@ type LegacyRuntime struct {
 	legacyRepo    legacyInstanceRepo.InstanceRepository
 	legacySvc     legacyInstanceService.InstanceService
 	whatsmeowSvc  legacyWhatsmeow.WhatsmeowService
+	groupSvc      legacyGroupService.GroupService
+	userSvc       legacyUserService.UserService
 	clientPointer map[string]*whatsmeow.Client
 	sendLocks     sync.Map
 	qrLocks       sync.Map
@@ -181,6 +206,9 @@ func NewLegacyRuntime(logger *slog.Logger) (*LegacyRuntime, error) {
 		legacyCfg,
 		loggerManager,
 	)
+	groupService := legacyGroupService.NewGroupService(clientPointer, whatsmeowService, loggerManager)
+	userService := legacyUserService.NewUserService(clientPointer, whatsmeowService, loggerManager)
+
 	return &LegacyRuntime{
 		logger:        logger.With("module", "instance_runtime"),
 		legacyCfg:     legacyCfg,
@@ -188,6 +216,8 @@ func NewLegacyRuntime(logger *slog.Logger) (*LegacyRuntime, error) {
 		legacyRepo:    instanceRepository,
 		legacySvc:     instanceService,
 		whatsmeowSvc:  whatsmeowService,
+		groupSvc:      groupService,
+		userSvc:       userService,
 		clientPointer: clientPointer,
 	}, nil
 }
@@ -269,6 +299,146 @@ func (r *LegacyRuntime) SendText(ctx context.Context, instance *repository.Insta
 	}
 
 	return nil, lastErr
+}
+
+func (r *LegacyRuntime) SendMedia(ctx context.Context, instance *repository.Instance, input resolvedMediaMessageInput) (*SendMediaResult, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	sendLock := r.sendLock(legacyInstance.Id)
+	sendLock.Lock()
+	defer sendLock.Unlock()
+
+	client, err := r.ensureConnectedClient(legacyInstance)
+	if err != nil {
+		return nil, err
+	}
+
+	recipient, err := r.resolveTextRecipient(client, legacyInstance, strings.TrimSpace(input.Number))
+	if err != nil {
+		return nil, err
+	}
+
+	fileData := input.FileData
+	if len(fileData) == 0 && strings.TrimSpace(input.URL) != "" {
+		fileData, err = downloadMediaURL(strings.TrimSpace(input.URL))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	mediaMessage, uploadType, messageType, preparedData, err := r.buildOutgoingMediaMessage(input, fileData)
+	if err != nil {
+		return nil, err
+	}
+
+	sendCtx, cancel := context.WithTimeout(context.Background(), sendTextTimeout)
+	defer cancel()
+
+	uploaded, err := client.Upload(sendCtx, preparedData, uploadType)
+	if err != nil {
+		return nil, err
+	}
+
+	applyUploadToMediaMessage(mediaMessage, input, uploaded, uint64(len(preparedData)))
+	messageID := whatsmeow.GenerateMessageID()
+	response, err := client.SendMessage(sendCtx, recipient, mediaMessage, whatsmeow.SendRequestExtra{ID: messageID})
+	if err != nil {
+		return nil, err
+	}
+
+	return &SendMediaResult{
+		MessageID:   messageID,
+		ServerID:    int64(response.ServerID),
+		Chat:        recipient.String(),
+		FromMe:      true,
+		Timestamp:   time.Now(),
+		MessageType: messageType,
+	}, nil
+}
+
+func (r *LegacyRuntime) SendAudio(ctx context.Context, instance *repository.Instance, input resolvedAudioMessageInput) (*SendMediaResult, error) {
+	return r.SendMedia(ctx, instance, resolvedMediaMessageInput{
+		Number:   input.Number,
+		Type:     "audio",
+		FileData: input.FileData,
+		Delay:    input.Delay,
+	})
+}
+
+func (r *LegacyRuntime) SearchChats(ctx context.Context, instance *repository.Instance, filter chatSearchFilter) ([]chatSearchRecord, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	if isNilInterface(r.userSvc) || isNilInterface(r.groupSvc) {
+		return nil, fmt.Errorf("legacy chat services unavailable")
+	}
+
+	if _, err := r.ensureConnectedClient(legacyInstance); err != nil {
+		return nil, err
+	}
+
+	contacts, contactErr := r.userSvc.GetContacts(legacyInstance)
+	groups, groupErr := r.groupSvc.GetMyGroups(legacyInstance)
+	if contactErr != nil && groupErr != nil {
+		return nil, contactErr
+	}
+
+	records := make([]chatSearchRecord, 0, len(contacts)+len(groups))
+	seen := make(map[string]struct{}, len(contacts)+len(groups))
+
+	for _, contact := range contacts {
+		remoteJID := strings.TrimSpace(contact.Jid)
+		if remoteJID == "" || !contact.Found {
+			continue
+		}
+		record := newChatSearchRecord(instance.ID, remoteJID, firstNonEmpty(contact.PushName, contact.FullName, contact.FirstName, contact.BusinessName, trimLegacyJID(remoteJID)))
+		if !matchesChatFilter(record, filter) {
+			continue
+		}
+		if _, ok := seen[record.RemoteJID]; ok {
+			continue
+		}
+		seen[record.RemoteJID] = struct{}{}
+		records = append(records, record)
+	}
+
+	for _, group := range groups {
+		remoteJID := strings.TrimSpace(group.JID.String())
+		if remoteJID == "" {
+			continue
+		}
+		record := newChatSearchRecord(instance.ID, remoteJID, firstNonEmpty(group.GroupName.Name, trimLegacyJID(remoteJID)))
+		if !matchesChatFilter(record, filter) {
+			continue
+		}
+		if _, ok := seen[record.RemoteJID]; ok {
+			continue
+		}
+		seen[record.RemoteJID] = struct{}{}
+		records = append(records, record)
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		left := strings.ToLower(records[i].PushName)
+		right := strings.ToLower(records[j].PushName)
+		if left == right {
+			return records[i].RemoteJID < records[j].RemoteJID
+		}
+		return left < right
+	})
+
+	return records, nil
 }
 
 func (r *LegacyRuntime) Connect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {
@@ -785,6 +955,251 @@ func (r *LegacyRuntime) checkTextRecipientOnWhatsApp(client *whatsmeow.Client, p
 	}
 
 	return resp[0].JID.String(), true, nil
+}
+
+func matchesChatFilter(record chatSearchRecord, filter chatSearchFilter) bool {
+	if filter.RemoteJID != "" && !strings.EqualFold(strings.TrimSpace(record.RemoteJID), filter.RemoteJID) {
+		return false
+	}
+	if filter.Query == "" {
+		return true
+	}
+
+	query := strings.ToLower(strings.TrimSpace(filter.Query))
+	return strings.Contains(strings.ToLower(record.PushName), query) ||
+		strings.Contains(strings.ToLower(record.RemoteJID), query)
+}
+
+func trimLegacyJID(value string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(value), "@s.whatsapp.net"), "@g.us")
+}
+
+func downloadMediaURL(rawURL string) ([]byte, error) {
+	resp, err := http.Get(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download media failed with status %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+func (r *LegacyRuntime) buildOutgoingMediaMessage(input resolvedMediaMessageInput, fileData []byte) (*waE2E.Message, whatsmeow.MediaType, string, []byte, error) {
+	mime, _ := mimetype.DetectReader(bytes.NewReader(fileData))
+	mimeType := mime.String()
+	if strings.TrimSpace(input.MimeType) != "" {
+		mimeType = strings.TrimSpace(input.MimeType)
+	}
+
+	switch input.Type {
+	case "image":
+		return &waE2E.Message{
+			ImageMessage: &waE2E.ImageMessage{
+				Caption:  proto.String(input.Caption),
+				Mimetype: proto.String(mimeType),
+			},
+		}, whatsmeow.MediaImage, "ImageMessage", fileData, nil
+	case "video":
+		return &waE2E.Message{
+			VideoMessage: &waE2E.VideoMessage{
+				Caption:  proto.String(input.Caption),
+				Mimetype: proto.String(mimeType),
+			},
+		}, whatsmeow.MediaVideo, "VideoMessage", fileData, nil
+	case "audio":
+		converted, duration, err := r.convertAudioPayload(fileData)
+		if err != nil {
+			return nil, whatsmeow.MediaAudio, "", nil, err
+		}
+		return &waE2E.Message{
+			AudioMessage: &waE2E.AudioMessage{
+				PTT:      proto.Bool(true),
+				Mimetype: proto.String("audio/ogg; codecs=opus"),
+				Seconds:  proto.Uint32(uint32(duration)),
+			},
+		}, whatsmeow.MediaAudio, "AudioMessage", converted, nil
+	case "document":
+		name := firstNonEmpty(input.FileName, "document")
+		return &waE2E.Message{
+			DocumentMessage: &waE2E.DocumentMessage{
+				FileName: proto.String(name),
+				Caption:  proto.String(input.Caption),
+				Mimetype: proto.String(mimeType),
+			},
+		}, whatsmeow.MediaDocument, "DocumentMessage", fileData, nil
+	default:
+		return nil, whatsmeow.MediaDocument, "", nil, fmt.Errorf("%w: unsupported media type %q", domain.ErrValidation, input.Type)
+	}
+}
+
+func applyUploadToMediaMessage(message *waE2E.Message, input resolvedMediaMessageInput, uploaded whatsmeow.UploadResponse, fileLength uint64) {
+	switch {
+	case message.GetImageMessage() != nil:
+		msg := message.GetImageMessage()
+		msg.URL = proto.String(uploaded.URL)
+		msg.DirectPath = proto.String(uploaded.DirectPath)
+		msg.MediaKey = uploaded.MediaKey
+		msg.FileEncSHA256 = uploaded.FileEncSHA256
+		msg.FileSHA256 = uploaded.FileSHA256
+		msg.FileLength = proto.Uint64(fileLength)
+	case message.GetVideoMessage() != nil:
+		msg := message.GetVideoMessage()
+		msg.URL = proto.String(uploaded.URL)
+		msg.DirectPath = proto.String(uploaded.DirectPath)
+		msg.MediaKey = uploaded.MediaKey
+		msg.FileEncSHA256 = uploaded.FileEncSHA256
+		msg.FileSHA256 = uploaded.FileSHA256
+		msg.FileLength = proto.Uint64(fileLength)
+	case message.GetAudioMessage() != nil:
+		msg := message.GetAudioMessage()
+		msg.URL = proto.String(uploaded.URL)
+		msg.DirectPath = proto.String(uploaded.DirectPath)
+		msg.MediaKey = uploaded.MediaKey
+		msg.FileEncSHA256 = uploaded.FileEncSHA256
+		msg.FileSHA256 = uploaded.FileSHA256
+		msg.FileLength = proto.Uint64(uploaded.FileLength)
+	case message.GetDocumentMessage() != nil:
+		msg := message.GetDocumentMessage()
+		msg.URL = proto.String(uploaded.URL)
+		msg.DirectPath = proto.String(uploaded.DirectPath)
+		msg.MediaKey = uploaded.MediaKey
+		msg.FileEncSHA256 = uploaded.FileEncSHA256
+		msg.FileSHA256 = uploaded.FileSHA256
+		msg.FileLength = proto.Uint64(fileLength)
+		if strings.TrimSpace(input.Caption) != "" {
+			message.DocumentWithCaptionMessage = &waE2E.FutureProofMessage{
+				Message: &waE2E.Message{DocumentMessage: msg},
+			}
+			message.DocumentMessage = nil
+		}
+	}
+}
+
+type convertAudioRequest struct {
+	URL    string `json:"url,omitempty"`
+	Base64 string `json:"base64,omitempty"`
+}
+
+type convertAudioResponse struct {
+	Duration int    `json:"duration"`
+	Audio    string `json:"audio"`
+}
+
+func (r *LegacyRuntime) convertAudioPayload(fileData []byte) ([]byte, int, error) {
+	if r.legacyCfg != nil && strings.TrimSpace(r.legacyCfg.ApiAudioConverter) != "" {
+		return convertAudioWithAPI(r.legacyCfg.ApiAudioConverter, r.legacyCfg.ApiAudioConverterKey, convertAudioRequest{
+			Base64: base64.StdEncoding.EncodeToString(fileData),
+		})
+	}
+	return convertAudioToOpusWithDuration(fileData)
+}
+
+func convertAudioWithAPI(apiURL, apiKey string, payload convertAudioRequest) ([]byte, int, error) {
+	var requestBody bytes.Buffer
+	writer := multipart.NewWriter(&requestBody)
+
+	if payload.URL != "" {
+		if err := writer.WriteField("url", payload.URL); err != nil {
+			return nil, 0, err
+		}
+	}
+	if payload.Base64 != "" {
+		if err := writer.WriteField("base64", payload.Base64); err != nil {
+			return nil, 0, err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, 0, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, apiURL, &requestBody)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("apikey", apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, 0, fmt.Errorf("audio converter returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var output convertAudioResponse
+	if err := json.Unmarshal(body, &output); err != nil {
+		return nil, 0, err
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(output.Audio)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return decoded, output.Duration, nil
+}
+
+func convertAudioToOpusWithDuration(inputData []byte) ([]byte, int, error) {
+	cmd := exec.Command("ffmpeg", "-i", "pipe:0",
+		"-f", "ogg",
+		"-vn",
+		"-c:a", "libopus",
+		"-avoid_negative_ts", "make_zero",
+		"-b:a", "128k",
+		"-ar", "48000",
+		"-ac", "1",
+		"-write_xing", "0",
+		"-compression_level", "10",
+		"-application", "voip",
+		"-fflags", "+bitexact",
+		"-flags", "+bitexact",
+		"-id3v2_version", "0",
+		"-map_metadata", "-1",
+		"-map_chapters", "-1",
+		"-write_bext", "0",
+		"pipe:1",
+	)
+
+	var outBuffer bytes.Buffer
+	var errBuffer bytes.Buffer
+	cmd.Stdin = bytes.NewReader(inputData)
+	cmd.Stdout = &outBuffer
+	cmd.Stderr = &errBuffer
+
+	if err := cmd.Run(); err != nil {
+		return nil, 0, fmt.Errorf("audio conversion failed: %v: %s", err, errBuffer.String())
+	}
+
+	duration, err := extractFFmpegDuration(errBuffer.String())
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return outBuffer.Bytes(), duration, nil
+}
+
+func extractFFmpegDuration(output string) (int, error) {
+	re := regexp.MustCompile(`time=(\d+):(\d+):(\d+)\.(\d+)`)
+	matches := re.FindStringSubmatch(output)
+	if len(matches) != 5 {
+		return 0, errors.New("audio duration not found")
+	}
+
+	hours, _ := strconv.Atoi(matches[1])
+	minutes, _ := strconv.Atoi(matches[2])
+	seconds, _ := strconv.Atoi(matches[3])
+	return hours*3600 + minutes*60 + seconds, nil
 }
 
 func isTransientSendError(err error) bool {
