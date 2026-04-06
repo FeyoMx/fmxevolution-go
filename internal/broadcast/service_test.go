@@ -86,6 +86,10 @@ func (instanceRepoMock) GetByID(_ context.Context, tenantID, instanceID string) 
 	return &repository.Instance{ID: instanceID, TenantID: tenantID}, nil
 }
 
+func (instanceRepoMock) GetByGlobalID(_ context.Context, instanceID string) (*repository.Instance, error) {
+	return &repository.Instance{ID: instanceID, TenantID: "tenant-1"}, nil
+}
+
 type processorMock struct {
 	err error
 }

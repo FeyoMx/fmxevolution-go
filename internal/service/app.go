@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/ai"
 	"github.com/EvolutionAPI/evolution-go/internal/auth"
@@ -13,6 +16,8 @@ import (
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 	"github.com/EvolutionAPI/evolution-go/internal/tenant"
 	"github.com/EvolutionAPI/evolution-go/internal/webhook"
+	"github.com/EvolutionAPI/evolution-go/pkg/chathistory"
+	"github.com/EvolutionAPI/evolution-go/pkg/sendstatus"
 )
 
 type Application struct {
@@ -42,10 +47,12 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 		instanceRuntime = legacyRuntime
 	}
 
+	registerConversationCallbacks(stores, logger)
+
 	app := &Application{
 		Auth:      auth.NewService(stores.Tenants, stores.Users, tokens),
 		Tenants:   tenant.NewService(stores.Tenants, stores.Users),
-		Instances: instance.NewService(stores.Instances, instanceRuntime, runtimeFactory, logger.With("module", "instance")),
+		Instances: instance.NewService(stores.Instances, stores.ConversationMessages, instanceRuntime, runtimeFactory, logger.With("module", "instance")),
 		CRM:       crm.NewService(stores.CRM),
 		Webhooks:  webhookService,
 		AI:        aiService,
@@ -116,4 +123,67 @@ func (d aiWebhookDispatcher) DispatchOutbound(ctx context.Context, tenantID stri
 	}
 
 	return converted, nil
+}
+
+func registerConversationCallbacks(stores *repository.Stores, logger *slog.Logger) {
+	if stores == nil || stores.ConversationMessages == nil || stores.Instances == nil {
+		return
+	}
+
+	sendstatus.RegisterReceiptListener(func(update sendstatus.ReceiptUpdate) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := stores.ConversationMessages.MarkReceipt(ctx, update.InstanceID, update.MessageID, update.State, update.At); err != nil && logger != nil {
+			logger.Warn("persist receipt to conversation history failed", "instance_id", update.InstanceID, "message_id", update.MessageID, "state", update.State, "error", err)
+		}
+	})
+
+	chathistory.RegisterInboundMessageListener(func(message chathistory.InboundMessage) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		instanceRecord, err := stores.Instances.GetByGlobalID(ctx, message.InstanceID)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("resolve instance for inbound history failed", "instance_id", message.InstanceID, "message_id", message.MessageID, "error", err)
+			}
+			return
+		}
+
+		payload := &repository.ConversationMessage{
+			TenantID:          instanceRecord.TenantID,
+			InstanceID:        instanceRecord.ID,
+			RemoteJID:         strings.TrimSpace(message.RemoteJID),
+			ExternalMessageID: strings.TrimSpace(message.MessageID),
+			Direction:         "inbound",
+			MessageType:       strings.TrimSpace(message.MessageType),
+			PushName:          strings.TrimSpace(message.PushName),
+			Source:            strings.TrimSpace(message.Source),
+			Body:              strings.TrimSpace(message.Body),
+			Status:            "received",
+			MessageTimestamp:  message.Timestamp.UTC(),
+			MediaURL:          strings.TrimSpace(message.MediaURL),
+			MimeType:          strings.TrimSpace(message.MimeType),
+			FileName:          strings.TrimSpace(message.FileName),
+			Caption:           strings.TrimSpace(message.Caption),
+			MessagePayload:    marshalConversationPayload(message.Message),
+		}
+
+		if err := stores.ConversationMessages.Upsert(ctx, payload); err != nil && logger != nil {
+			logger.Warn("persist inbound conversation history failed", "instance_id", message.InstanceID, "message_id", message.MessageID, "error", err)
+		}
+	})
+}
+
+func marshalConversationPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }

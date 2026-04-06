@@ -9,5 +9,7 @@ coverage.*
 .DS_Store
 api.exe
 api.exe~
+api2.exe
+api2.exe~
 api.pid
 api*.log

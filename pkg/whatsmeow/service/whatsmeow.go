@@ -35,6 +35,7 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
+	"github.com/EvolutionAPI/evolution-go/pkg/chathistory"
 	"github.com/EvolutionAPI/evolution-go/pkg/config"
 	producer_interfaces "github.com/EvolutionAPI/evolution-go/pkg/events/interfaces"
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
@@ -164,6 +165,168 @@ func hasMediaStorage(storage storage_interfaces.MediaStorage) bool {
 	default:
 		return true
 	}
+}
+
+func notifyInboundConversationHistory(instanceID string, evt *events.Message, parsedMessageType string, dataMap map[string]interface{}) {
+	if evt == nil {
+		return
+	}
+
+	payload, _ := dataMap["Message"].(map[string]interface{})
+	remoteJID := evt.Info.Chat.String()
+
+	chathistory.NotifyInboundMessage(chathistory.InboundMessage{
+		InstanceID:  instanceID,
+		MessageID:   evt.Info.ID,
+		RemoteJID:   remoteJID,
+		PushName:    firstConversationString(anyToString(dataMap["pushName"]), trimConversationRemoteJID(remoteJID)),
+		MessageType: normalizeConversationMessageType(parsedMessageType, payload),
+		Body:        extractConversationBody(payload),
+		Source:      evt.Info.Chat.ToNonAD().User,
+		MediaURL:    conversationMediaURL(payload),
+		MimeType:    conversationMimeType(payload),
+		FileName:    conversationFileName(payload),
+		Caption:     conversationCaption(payload),
+		Message:     payload,
+		Timestamp:   evt.Info.Timestamp.UTC(),
+	})
+}
+
+func normalizeConversationMessageType(parsedMessageType string, payload map[string]interface{}) string {
+	lowered := strings.ToLower(strings.TrimSpace(parsedMessageType))
+	switch {
+	case strings.HasPrefix(lowered, "image"):
+		return "imageMessage"
+	case strings.HasPrefix(lowered, "video"):
+		return "videoMessage"
+	case strings.HasPrefix(lowered, "audio"):
+		return "audioMessage"
+	case strings.HasPrefix(lowered, "document"):
+		return "documentMessage"
+	case strings.HasPrefix(lowered, "conversation"), strings.HasPrefix(lowered, "extendedtext"):
+		return "conversation"
+	}
+
+	if _, ok := payload["imageMessage"].(map[string]interface{}); ok {
+		return "imageMessage"
+	}
+	if _, ok := payload["videoMessage"].(map[string]interface{}); ok {
+		return "videoMessage"
+	}
+	if _, ok := payload["audioMessage"].(map[string]interface{}); ok {
+		return "audioMessage"
+	}
+	if _, ok := payload["documentMessage"].(map[string]interface{}); ok {
+		return "documentMessage"
+	}
+	if _, ok := payload["extendedTextMessage"].(map[string]interface{}); ok {
+		return "conversation"
+	}
+	if strings.TrimSpace(anyToString(payload["conversation"])) != "" {
+		return "conversation"
+	}
+
+	return strings.TrimSpace(parsedMessageType)
+}
+
+func extractConversationBody(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(anyToString(payload["conversation"])); text != "" {
+		return text
+	}
+	if extended, ok := payload["extendedTextMessage"].(map[string]interface{}); ok {
+		return strings.TrimSpace(anyToString(extended["text"]))
+	}
+	if imageMessage, ok := payload["imageMessage"].(map[string]interface{}); ok {
+		if text := strings.TrimSpace(anyToString(imageMessage["caption"])); text != "" {
+			return text
+		}
+	}
+	if videoMessage, ok := payload["videoMessage"].(map[string]interface{}); ok {
+		if text := strings.TrimSpace(anyToString(videoMessage["caption"])); text != "" {
+			return text
+		}
+	}
+	if documentMessage, ok := payload["documentMessage"].(map[string]interface{}); ok {
+		if text := strings.TrimSpace(anyToString(documentMessage["caption"])); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func conversationMediaURL(payload map[string]interface{}) string {
+	return strings.TrimSpace(anyToString(payload["mediaUrl"]))
+}
+
+func conversationMimeType(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(anyToString(payload["mimetype"])); value != "" {
+		return value
+	}
+	for _, key := range []string{"imageMessage", "videoMessage", "audioMessage", "documentMessage"} {
+		if nested, ok := payload[key].(map[string]interface{}); ok {
+			if value := strings.TrimSpace(anyToString(nested["mimetype"])); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func conversationFileName(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	if documentMessage, ok := payload["documentMessage"].(map[string]interface{}); ok {
+		return strings.TrimSpace(anyToString(documentMessage["fileName"]))
+	}
+	return ""
+}
+
+func conversationCaption(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	for _, key := range []string{"imageMessage", "videoMessage", "documentMessage"} {
+		if nested, ok := payload[key].(map[string]interface{}); ok {
+			if caption := strings.TrimSpace(anyToString(nested["caption"])); caption != "" {
+				return caption
+			}
+		}
+	}
+	return ""
+}
+
+func anyToString(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprintf("%v", value)
+}
+
+func firstConversationString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func trimConversationRemoteJID(remoteJID string) string {
+	trimmed := strings.TrimSpace(remoteJID)
+	if at := strings.Index(trimmed, "@"); at >= 0 {
+		return trimmed[:at]
+	}
+	return trimmed
 }
 
 func (w whatsmeowService) ReconnectClient(instanceId string) error {
@@ -1522,6 +1685,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		postMap["data"] = dataMap
+		notifyInboundConversationHistory(mycli.userID, evt, parsedMessageType, dataMap)
 
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] ===== MESSAGE PROCESSING COMPLETED ===== ID: %s, From: %s, Type: %s, Webhook: %v", mycli.userID, evt.Info.ID, evt.Info.Chat.String(), evt.Info.Type, doWebhook)
 	case *events.Receipt:

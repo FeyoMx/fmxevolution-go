@@ -22,10 +22,25 @@ type InstanceRepository interface {
 	Create(ctx context.Context, instance *Instance) error
 	ListByTenant(ctx context.Context, tenantID string) ([]Instance, error)
 	GetByID(ctx context.Context, tenantID, instanceID string) (*Instance, error)
+	GetByGlobalID(ctx context.Context, instanceID string) (*Instance, error)
 	FindByEngineInstanceID(ctx context.Context, engineInstanceID string) (*Instance, error)
 	FindByName(ctx context.Context, name string) (*Instance, error)
 	Update(ctx context.Context, instance *Instance) error
 	Delete(ctx context.Context, tenantID, instanceID string) error
+}
+
+type ConversationMessageFilter struct {
+	RemoteJID         string
+	ExternalMessageID string
+	Query             string
+	Limit             int
+	Before            *time.Time
+}
+
+type ConversationMessageRepository interface {
+	Upsert(ctx context.Context, message *ConversationMessage) error
+	List(ctx context.Context, tenantID, instanceID string, filter ConversationMessageFilter) ([]ConversationMessage, error)
+	MarkReceipt(ctx context.Context, instanceID, externalMessageID, state string, at time.Time) error
 }
 
 type CRMRepository interface {

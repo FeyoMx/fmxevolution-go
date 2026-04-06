@@ -59,17 +59,41 @@ type Message struct {
 	UpdatedAt  time.Time
 }
 
+type ConversationMessage struct {
+	ID                string     `json:"id" gorm:"type:uuid;primaryKey"`
+	TenantID          string     `json:"tenant_id" gorm:"type:uuid;index:idx_conversation_messages_lookup,priority:1;not null"`
+	InstanceID        string     `json:"instance_id" gorm:"type:uuid;index:idx_conversation_messages_lookup,priority:2;not null;uniqueIndex:idx_conversation_messages_instance_external,priority:1"`
+	RemoteJID         string     `json:"remote_jid" gorm:"size:255;index:idx_conversation_messages_lookup,priority:3;not null"`
+	ExternalMessageID string     `json:"external_message_id" gorm:"size:255;index:idx_conversation_messages_lookup,priority:4;not null;uniqueIndex:idx_conversation_messages_instance_external,priority:2"`
+	Direction         string     `json:"direction" gorm:"size:20;not null"`
+	MessageType       string     `json:"message_type" gorm:"size:100;not null"`
+	PushName          string     `json:"push_name" gorm:"size:255"`
+	Source            string     `json:"source" gorm:"size:255"`
+	Body              string     `json:"body" gorm:"type:text"`
+	Status            string     `json:"status" gorm:"size:50;index;not null"`
+	MessageTimestamp  time.Time  `json:"message_timestamp" gorm:"index;not null"`
+	MediaURL          string     `json:"media_url" gorm:"size:1000"`
+	MimeType          string     `json:"mime_type" gorm:"size:255"`
+	FileName          string     `json:"file_name" gorm:"size:255"`
+	Caption           string     `json:"caption" gorm:"type:text"`
+	MessagePayload    string     `json:"message_payload" gorm:"type:text"`
+	DeliveredAt       *time.Time `json:"delivered_at"`
+	ReadAt            *time.Time `json:"read_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
 type Contact struct {
-	ID          string `gorm:"type:uuid;primaryKey"`
-	TenantID    string `gorm:"type:uuid;uniqueIndex:idx_contacts_tenant_phone;index;not null"`
-	Phone       string `gorm:"size:50;uniqueIndex:idx_contacts_tenant_phone;index;not null"`
-	Name        string `gorm:"size:255;not null"`
-	Email       string `gorm:"size:255"`
-	InstanceID  string `gorm:"type:uuid;index"`
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	Tags        []Tag  `gorm:"many2many:contact_tags;"`
-	Notes       []Note
+	ID         string `gorm:"type:uuid;primaryKey"`
+	TenantID   string `gorm:"type:uuid;uniqueIndex:idx_contacts_tenant_phone;index;not null"`
+	Phone      string `gorm:"size:50;uniqueIndex:idx_contacts_tenant_phone;index;not null"`
+	Name       string `gorm:"size:255;not null"`
+	Email      string `gorm:"size:255"`
+	InstanceID string `gorm:"type:uuid;index"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Tags       []Tag `gorm:"many2many:contact_tags;"`
+	Notes      []Note
 }
 
 type Tag struct {
@@ -122,36 +146,36 @@ type Deal struct {
 }
 
 type BroadcastJob struct {
-	ID           string `gorm:"type:uuid;primaryKey"`
-	TenantID     string `gorm:"type:uuid;index;not null"`
-	InstanceID   string `gorm:"type:uuid;index;not null"`
-	Status       string `gorm:"size:50;index;not null"`
-	Message      string `gorm:"type:text;not null"`
-	RatePerHour  int    `gorm:"not null;default:0"`
-	DelaySec     int    `gorm:"not null;default:0"`
-	Attempts     int    `gorm:"not null;default:0"`
-	MaxAttempts  int    `gorm:"not null;default:3"`
-	WorkerID     string `gorm:"size:100;index"`
-	LastError    string `gorm:"type:text"`
-	ScheduledAt  *time.Time
-	AvailableAt  time.Time `gorm:"index;not null"`
-	StartedAt    *time.Time
-	CompletedAt  *time.Time
-	FailedAt     *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID          string `gorm:"type:uuid;primaryKey"`
+	TenantID    string `gorm:"type:uuid;index;not null"`
+	InstanceID  string `gorm:"type:uuid;index;not null"`
+	Status      string `gorm:"size:50;index;not null"`
+	Message     string `gorm:"type:text;not null"`
+	RatePerHour int    `gorm:"not null;default:0"`
+	DelaySec    int    `gorm:"not null;default:0"`
+	Attempts    int    `gorm:"not null;default:0"`
+	MaxAttempts int    `gorm:"not null;default:3"`
+	WorkerID    string `gorm:"size:100;index"`
+	LastError   string `gorm:"type:text"`
+	ScheduledAt *time.Time
+	AvailableAt time.Time `gorm:"index;not null"`
+	StartedAt   *time.Time
+	CompletedAt *time.Time
+	FailedAt    *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type WebhookEndpoint struct {
-	ID                  string `gorm:"type:uuid;primaryKey"`
-	TenantID            string `gorm:"type:uuid;index;not null"`
-	Name                string `gorm:"size:255;not null"`
-	URL                 string `gorm:"size:500;not null"`
-	InboundEnabled      bool   `gorm:"not null;default:true"`
-	OutboundEnabled     bool   `gorm:"not null;default:true"`
-	SigningSecret       string `gorm:"size:255"`
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID              string `gorm:"type:uuid;primaryKey"`
+	TenantID        string `gorm:"type:uuid;index;not null"`
+	Name            string `gorm:"size:255;not null"`
+	URL             string `gorm:"size:500;not null"`
+	InboundEnabled  bool   `gorm:"not null;default:true"`
+	OutboundEnabled bool   `gorm:"not null;default:true"`
+	SigningSecret   string `gorm:"size:255"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type WebhookDelivery struct {
@@ -194,23 +218,27 @@ type AIConversationMessage struct {
 	UpdatedAt       time.Time
 }
 
-func (t *Tenant) BeforeCreate(_ *gorm.DB) error      { ensureID(&t.ID); return nil }
-func (u *User) BeforeCreate(_ *gorm.DB) error        { ensureID(&u.ID); return nil }
-func (i *Instance) BeforeCreate(_ *gorm.DB) error    { ensureID(&i.ID); return nil }
-func (m *Message) BeforeCreate(_ *gorm.DB) error     { ensureID(&m.ID); return nil }
-func (c *Contact) BeforeCreate(_ *gorm.DB) error     { ensureID(&c.ID); return nil }
-func (t *Tag) BeforeCreate(_ *gorm.DB) error         { ensureID(&t.ID); return nil }
-func (n *Note) BeforeCreate(_ *gorm.DB) error        { ensureID(&n.ID); return nil }
-func (p *Pipeline) BeforeCreate(_ *gorm.DB) error    { ensureID(&p.ID); return nil }
-func (d *DealStage) BeforeCreate(_ *gorm.DB) error   { ensureID(&d.ID); return nil }
-func (d *Deal) BeforeCreate(_ *gorm.DB) error        { ensureID(&d.ID); return nil }
+func (t *Tenant) BeforeCreate(_ *gorm.DB) error   { ensureID(&t.ID); return nil }
+func (u *User) BeforeCreate(_ *gorm.DB) error     { ensureID(&u.ID); return nil }
+func (i *Instance) BeforeCreate(_ *gorm.DB) error { ensureID(&i.ID); return nil }
+func (m *Message) BeforeCreate(_ *gorm.DB) error  { ensureID(&m.ID); return nil }
+func (m *ConversationMessage) BeforeCreate(_ *gorm.DB) error {
+	ensureID(&m.ID)
+	return nil
+}
+func (c *Contact) BeforeCreate(_ *gorm.DB) error      { ensureID(&c.ID); return nil }
+func (t *Tag) BeforeCreate(_ *gorm.DB) error          { ensureID(&t.ID); return nil }
+func (n *Note) BeforeCreate(_ *gorm.DB) error         { ensureID(&n.ID); return nil }
+func (p *Pipeline) BeforeCreate(_ *gorm.DB) error     { ensureID(&p.ID); return nil }
+func (d *DealStage) BeforeCreate(_ *gorm.DB) error    { ensureID(&d.ID); return nil }
+func (d *Deal) BeforeCreate(_ *gorm.DB) error         { ensureID(&d.ID); return nil }
 func (b *BroadcastJob) BeforeCreate(_ *gorm.DB) error { ensureID(&b.ID); return nil }
 func (w *WebhookEndpoint) BeforeCreate(_ *gorm.DB) error {
 	ensureID(&w.ID)
 	return nil
 }
-func (w *WebhookDelivery) BeforeCreate(_ *gorm.DB) error { ensureID(&w.ID); return nil }
-func (a *AISettings) BeforeCreate(_ *gorm.DB) error { ensureID(&a.ID); return nil }
+func (w *WebhookDelivery) BeforeCreate(_ *gorm.DB) error       { ensureID(&w.ID); return nil }
+func (a *AISettings) BeforeCreate(_ *gorm.DB) error            { ensureID(&a.ID); return nil }
 func (a *AIConversationMessage) BeforeCreate(_ *gorm.DB) error { ensureID(&a.ID); return nil }
 
 func ensureID(id *string) {

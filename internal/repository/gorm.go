@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -13,15 +14,16 @@ import (
 )
 
 type Stores struct {
-	DB         *gorm.DB
-	SQL        *sql.DB
-	Tenants    TenantRepository
-	Users      UserRepository
-	Instances  InstanceRepository
-	CRM        CRMRepository
-	Broadcasts BroadcastRepository
-	Webhooks   WebhookRepository
-	AI         AIRepository
+	DB                   *gorm.DB
+	SQL                  *sql.DB
+	Tenants              TenantRepository
+	Users                UserRepository
+	Instances            InstanceRepository
+	ConversationMessages ConversationMessageRepository
+	CRM                  CRMRepository
+	Broadcasts           BroadcastRepository
+	Webhooks             WebhookRepository
+	AI                   AIRepository
 }
 
 func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration) (*Stores, error) {
@@ -44,6 +46,7 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 		&User{},
 		&Instance{},
 		&Message{},
+		&ConversationMessage{},
 		&Contact{},
 		&Tag{},
 		&Note{},
@@ -60,15 +63,16 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 	}
 
 	return &Stores{
-		DB:         db,
-		SQL:        sqlDB,
-		Tenants:    &gormTenantRepository{db: db},
-		Users:      &gormUserRepository{db: db},
-		Instances:  &gormInstanceRepository{db: db},
-		CRM:        &gormCRMRepository{db: db},
-		Broadcasts: &gormBroadcastRepository{db: db},
-		Webhooks:   &gormWebhookRepository{db: db},
-		AI:         &gormAIRepository{db: db},
+		DB:                   db,
+		SQL:                  sqlDB,
+		Tenants:              &gormTenantRepository{db: db},
+		Users:                &gormUserRepository{db: db},
+		Instances:            &gormInstanceRepository{db: db},
+		ConversationMessages: &gormConversationMessageRepository{db: db},
+		CRM:                  &gormCRMRepository{db: db},
+		Broadcasts:           &gormBroadcastRepository{db: db},
+		Webhooks:             &gormWebhookRepository{db: db},
+		AI:                   &gormAIRepository{db: db},
 	}, nil
 }
 
@@ -168,6 +172,15 @@ func (r *gormInstanceRepository) GetByID(ctx context.Context, tenantID, instance
 	return &instance, nil
 }
 
+func (r *gormInstanceRepository) GetByGlobalID(ctx context.Context, instanceID string) (*Instance, error) {
+	var instance Instance
+	err := r.db.WithContext(ctx).First(&instance, "id = ?", instanceID).Error
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return &instance, nil
+}
+
 func (r *gormInstanceRepository) FindByEngineInstanceID(ctx context.Context, engineInstanceID string) (*Instance, error) {
 	var instance Instance
 	err := r.db.WithContext(ctx).First(&instance, "engine_instance_id = ?", engineInstanceID).Error
@@ -202,6 +215,106 @@ func (r *gormInstanceRepository) Delete(ctx context.Context, tenantID, instanceI
 }
 
 type gormCRMRepository struct{ db *gorm.DB }
+
+type gormConversationMessageRepository struct{ db *gorm.DB }
+
+func (r *gormConversationMessageRepository) Upsert(ctx context.Context, message *ConversationMessage) error {
+	if message == nil {
+		return nil
+	}
+
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "instance_id"},
+			{Name: "external_message_id"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"tenant_id",
+			"remote_jid",
+			"direction",
+			"message_type",
+			"push_name",
+			"source",
+			"body",
+			"status",
+			"message_timestamp",
+			"media_url",
+			"mime_type",
+			"file_name",
+			"caption",
+			"message_payload",
+			"delivered_at",
+			"read_at",
+			"updated_at",
+		}),
+	}).Create(message).Error
+}
+
+func (r *gormConversationMessageRepository) List(ctx context.Context, tenantID, instanceID string, filter ConversationMessageFilter) ([]ConversationMessage, error) {
+	var messages []ConversationMessage
+
+	query := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND instance_id = ?", tenantID, instanceID).
+		Order("message_timestamp DESC, created_at DESC")
+
+	if strings.TrimSpace(filter.RemoteJID) != "" {
+		query = query.Where("remote_jid = ?", strings.TrimSpace(filter.RemoteJID))
+	}
+	if strings.TrimSpace(filter.ExternalMessageID) != "" {
+		query = query.Where("external_message_id = ?", strings.TrimSpace(filter.ExternalMessageID))
+	}
+	if strings.TrimSpace(filter.Query) != "" {
+		query = query.Where("body ILIKE ?", "%"+strings.TrimSpace(filter.Query)+"%")
+	}
+	if filter.Before != nil && !filter.Before.IsZero() {
+		query = query.Where("message_timestamp < ?", filter.Before.UTC())
+	}
+	if filter.Limit > 0 {
+		query = query.Limit(filter.Limit)
+	}
+
+	if err := query.Find(&messages).Error; err != nil {
+		return nil, err
+	}
+
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
+}
+
+func (r *gormConversationMessageRepository) MarkReceipt(ctx context.Context, instanceID, externalMessageID, state string, at time.Time) error {
+	instanceID = strings.TrimSpace(instanceID)
+	externalMessageID = strings.TrimSpace(externalMessageID)
+	state = strings.ToLower(strings.TrimSpace(state))
+	if instanceID == "" || externalMessageID == "" {
+		return nil
+	}
+
+	updates := map[string]any{
+		"updated_at": time.Now().UTC(),
+	}
+
+	switch state {
+	case "delivered":
+		timestamp := at.UTC()
+		updates["status"] = "delivered"
+		updates["delivered_at"] = &timestamp
+	case "read":
+		timestamp := at.UTC()
+		updates["status"] = "read"
+		updates["delivered_at"] = &timestamp
+		updates["read_at"] = &timestamp
+	default:
+		return nil
+	}
+
+	return r.db.WithContext(ctx).
+		Model(&ConversationMessage{}).
+		Where("instance_id = ? AND external_message_id = ?", instanceID, externalMessageID).
+		Updates(updates).Error
+}
 
 func (r *gormCRMRepository) CreateContact(ctx context.Context, contact *Contact) error {
 	return r.db.WithContext(ctx).Create(contact).Error

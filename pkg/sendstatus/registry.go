@@ -25,6 +25,15 @@ type JobStatus struct {
 	DeliveryConfirmed bool       `json:"delivery_confirmed"`
 }
 
+type ReceiptUpdate struct {
+	InstanceID string
+	MessageID  string
+	State      string
+	At         time.Time
+}
+
+type ReceiptListener func(ReceiptUpdate)
+
 func (j JobStatus) DeliveryStatus() string {
 	if j.ReadAt != nil {
 		return "read"
@@ -53,6 +62,7 @@ type registry struct {
 	mu           sync.RWMutex
 	jobs         map[string]record
 	messageIndex map[string]string
+	listeners    []ReceiptListener
 }
 
 var global = &registry{
@@ -91,17 +101,28 @@ func Load(tenantID, jobID string) (JobStatus, bool) {
 	return record.status, true
 }
 
-func MarkReceipt(instanceID, messageID, state string, at time.Time) bool {
+func RegisterReceiptListener(listener ReceiptListener) {
+	if listener == nil {
+		return
+	}
+
 	global.mu.Lock()
 	defer global.mu.Unlock()
+	global.listeners = append(global.listeners, listener)
+}
+
+func MarkReceipt(instanceID, messageID, state string, at time.Time) bool {
+	global.mu.Lock()
 
 	jobKey, ok := global.messageIndex[instanceMessageKey(instanceID, messageID)]
 	if !ok {
+		global.mu.Unlock()
 		return false
 	}
 
 	record, ok := global.jobs[jobKey]
 	if !ok {
+		global.mu.Unlock()
 		return false
 	}
 
@@ -124,11 +145,25 @@ func MarkReceipt(instanceID, messageID, state string, at time.Time) bool {
 		}
 		updated.DeliveryConfirmed = true
 	default:
+		global.mu.Unlock()
 		return false
 	}
 
 	record.status = updated
 	global.jobs[jobKey] = record
+	listeners := append([]ReceiptListener(nil), global.listeners...)
+	global.mu.Unlock()
+
+	update := ReceiptUpdate{
+		InstanceID: instanceID,
+		MessageID:  messageID,
+		State:      strings.ToLower(strings.TrimSpace(state)),
+		At:         at.UTC(),
+	}
+	for _, listener := range listeners {
+		go listener(update)
+	}
+
 	return true
 }
 

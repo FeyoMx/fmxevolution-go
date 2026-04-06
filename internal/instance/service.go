@@ -19,6 +19,7 @@ import (
 
 type Service struct {
 	repo           repository.InstanceRepository
+	history        repository.ConversationMessageRepository
 	runtime        Runtime
 	runtimeFactory func() (Runtime, error)
 	runtimeMu      sync.Mutex
@@ -41,9 +42,10 @@ type SendMediaOutput = SendMediaResult
 
 type SendTextJobStatus = sendstatus.JobStatus
 
-func NewService(repo repository.InstanceRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
+func NewService(repo repository.InstanceRepository, history repository.ConversationMessageRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
 	return &Service{
 		repo:           repo,
+		history:        history,
 		runtime:        runtime,
 		runtimeFactory: runtimeFactory,
 		logger:         logger,
@@ -464,6 +466,7 @@ func (s *Service) SendText(ctx context.Context, tenantID, reference string, inpu
 		return nil, instance, err
 	}
 
+	s.persistOutboundText(ctx, tenantID, instance, input, message)
 	return message, instance, nil
 }
 
@@ -512,6 +515,7 @@ func (s *Service) SendMedia(ctx context.Context, tenantID, reference string, inp
 		return nil, instance, err
 	}
 
+	s.persistOutboundMedia(ctx, tenantID, instance, input, message)
 	return message, instance, nil
 }
 
@@ -553,6 +557,7 @@ func (s *Service) SendAudio(ctx context.Context, tenantID, reference string, inp
 		return nil, instance, err
 	}
 
+	s.persistOutboundAudio(ctx, tenantID, instance, input, message)
 	return message, instance, nil
 }
 
@@ -589,6 +594,43 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 	}
 
 	return chats, instance, nil
+}
+
+func (s *Service) SearchMessages(ctx context.Context, tenantID, reference string, input MessageSearchRequest) ([]legacyMessageRecord, *repository.Instance, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	filter, err := normalizeMessageSearchRequest(input)
+	if err != nil {
+		return nil, instance, err
+	}
+	if s.history == nil {
+		return nil, instance, fmt.Errorf("message history repository unavailable")
+	}
+
+	messages, err := s.history.List(ctx, tenantID, instance.ID, repository.ConversationMessageFilter{
+		RemoteJID:         filter.RemoteJID,
+		ExternalMessageID: filter.MessageID,
+		Query:             filter.Query,
+		Limit:             filter.Limit,
+		Before:            filter.Before,
+	})
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error(
+				"search messages failed",
+				"instance_id", instance.ID,
+				"reference", reference,
+				"remote_jid", filter.RemoteJID,
+				"error", err,
+			)
+		}
+		return nil, instance, err
+	}
+
+	return toLegacyMessageRecords(messages), instance, nil
 }
 
 func (s *Service) QueueSendText(ctx context.Context, tenantID, reference string, input SendTextInput) (string, *repository.Instance, error) {
