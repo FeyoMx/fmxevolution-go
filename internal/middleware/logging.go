@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
@@ -24,6 +25,9 @@ func RequestLogging(logger *slog.Logger) gin.HandlerFunc {
 		if path == "" && c.Request != nil && c.Request.URL != nil {
 			path = c.Request.URL.Path
 		}
+		if shouldSkipRequestLog(path, c.Request.Method, c.Writer.Status(), time.Since(start)) {
+			return
+		}
 		logger.Info("http request",
 			"request_id", requestID,
 			"tenant_id", identity.TenantID,
@@ -34,4 +38,24 @@ func RequestLogging(logger *slog.Logger) gin.HandlerFunc {
 			"client_ip", c.ClientIP(),
 		)
 	}
+}
+
+func shouldSkipRequestLog(path, method string, status int, latency time.Duration) bool {
+	if method != "GET" || status != 200 {
+		return false
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(path))
+	if normalized == "" {
+		return false
+	}
+
+	// The frontend polls QR routes very aggressively while the session is already
+	// connected. Successful low-latency responses add little operational value and
+	// can drown out real errors in the backend logs.
+	if (strings.HasSuffix(normalized, "/qr") || strings.HasSuffix(normalized, "/qrcode")) && latency < 500*time.Millisecond {
+		return true
+	}
+
+	return false
 }

@@ -46,6 +46,7 @@ import (
 	message_model "github.com/EvolutionAPI/evolution-go/pkg/message/model"
 	message_repository "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
 	poll_service "github.com/EvolutionAPI/evolution-go/pkg/poll/service"
+	"github.com/EvolutionAPI/evolution-go/pkg/sendstatus"
 	storage_interfaces "github.com/EvolutionAPI/evolution-go/pkg/storage/interfaces"
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
 )
@@ -1558,6 +1559,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					message.Timestamp = evt.Timestamp.Format("2006-01-02 15:04:05")
 					message.Status = "Read"
 					message.Source = evt.Chat.ToNonAD().User
+					sendstatus.MarkReceipt(mycli.userID, v, "read", evt.Timestamp.UTC())
 
 					if mycli.config.DatabaseSaveMessages {
 						go mycli.messageRepository.InsertMessage(message)
@@ -1569,25 +1571,27 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		} else if evt.Type == types.ReceiptTypeDelivered {
 			postMap["state"] = "Delivered"
 
-			var message message_model.Message
+			for _, messageID := range evt.MessageIDs {
+				var message message_model.Message
 
-			message.MessageID = evt.MessageIDs[0]
-			message.Timestamp = evt.Timestamp.Format("2006-01-02 15:04:05")
-			message.Status = "Delivered"
-			message.Source = evt.Chat.ToNonAD().User
+				message.MessageID = messageID
+				message.Timestamp = evt.Timestamp.Format("2006-01-02 15:04:05")
+				message.Status = "Delivered"
+				message.Source = evt.Chat.ToNonAD().User
 
-			messageKey := fmt.Sprintf("%s_%s_%s", mycli.userID, evt.MessageIDs[0], "Delivered")
-			if _, found := mycli.processedMessages.Get(messageKey); found {
-				mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Message duplicated ignored: %s", mycli.userID, evt.MessageIDs[0])
-				return
+				messageKey := fmt.Sprintf("%s_%s_%s", mycli.userID, messageID, "Delivered")
+				if _, found := mycli.processedMessages.Get(messageKey); found {
+					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Message duplicated ignored: %s", mycli.userID, messageID)
+					continue
+				}
+
+				mycli.processedMessages.Set(messageKey, true, 30*time.Minute)
+				sendstatus.MarkReceipt(mycli.userID, messageID, "delivered", evt.Timestamp.UTC())
+
+				if mycli.config.DatabaseSaveMessages {
+					go mycli.messageRepository.InsertMessage(message)
+				}
 			}
-
-			mycli.processedMessages.Set(messageKey, true, 30*time.Minute)
-
-			if mycli.config.DatabaseSaveMessages {
-				go mycli.messageRepository.InsertMessage(message)
-			}
-
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Message delivered to %s", mycli.userID, evt.SourceString())
 		} else {
 			return
@@ -1815,6 +1819,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.PushName:
 		doWebhook = true
 		postMap["event"] = "PushName"
+	case *events.UserAbout:
+		// This presence/profile update is expected noise in active sessions.
+		// We intentionally ignore it to avoid filling logs with "Unhandled event"
+		// warnings for behavior that does not require webhook dispatch.
+		doWebhook = false
+		return
 	case *events.IdentityChange:
 		doWebhook = false
 	case *events.GroupInfo:

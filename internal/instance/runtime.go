@@ -601,13 +601,24 @@ func (r *LegacyRuntime) ensureConnectedClient(instance *legacyInstanceModel.Inst
 		return client, nil
 	}
 
+	if client, err := r.hardReconnectClient(instance); err == nil {
+		return client, nil
+	}
+
 	if _, _, _, err := r.legacySvc.Connect(&legacyInstanceService.ConnectStruct{
 		WebhookUrl: instance.Webhook,
 	}, instance); err != nil {
+		if client, retryErr := r.hardReconnectClient(instance); retryErr == nil {
+			return client, nil
+		}
 		return nil, err
 	}
 
-	return r.waitForActiveClient(instance.Id, clientReadyTimeout)
+	if client, err := r.waitForActiveClient(instance.Id, clientReadyTimeout); err == nil {
+		return client, nil
+	}
+
+	return r.hardReconnectClient(instance)
 }
 
 func (r *LegacyRuntime) refreshConnectedClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
@@ -620,16 +631,27 @@ func (r *LegacyRuntime) refreshConnectedClient(instance *legacyInstanceModel.Ins
 		return client, nil
 	}
 
+	if client, err = r.hardReconnectClient(instance); err == nil {
+		return client, nil
+	}
+
 	if _, _, _, connectErr := r.legacySvc.Connect(&legacyInstanceService.ConnectStruct{
 		WebhookUrl: instance.Webhook,
 	}, instance); connectErr != nil {
 		if client, retryErr := r.waitForActiveClient(instance.Id, sendRetryDelay); retryErr == nil {
 			return client, nil
 		}
+		if client, retryErr := r.hardReconnectClient(instance); retryErr == nil {
+			return client, nil
+		}
 		return nil, connectErr
 	}
 
-	return r.waitForActiveClient(instance.Id, clientReadyTimeout)
+	if client, err = r.waitForActiveClient(instance.Id, clientReadyTimeout); err == nil {
+		return client, nil
+	}
+
+	return r.hardReconnectClient(instance)
 }
 
 func (r *LegacyRuntime) reconnectExistingClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
@@ -646,6 +668,18 @@ func (r *LegacyRuntime) reconnectExistingClient(instance *legacyInstanceModel.In
 	}
 
 	return r.waitForActiveClient(instance.Id, clientReadyTimeout)
+}
+
+func (r *LegacyRuntime) hardReconnectClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
+	if isNilInterface(r.whatsmeowSvc) {
+		return nil, fmt.Errorf("whatsmeow reconnect service unavailable")
+	}
+
+	if err := r.whatsmeowSvc.ReconnectClient(instance.Id); err != nil {
+		return nil, err
+	}
+
+	return r.waitForActiveClient(instance.Id, clientReadyTimeout+sendRetryDelay)
 }
 
 func (r *LegacyRuntime) waitForActiveClient(instanceID string, timeout time.Duration) (*whatsmeow.Client, error) {

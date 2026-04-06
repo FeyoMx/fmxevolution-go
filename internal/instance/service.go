@@ -13,6 +13,7 @@ import (
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 	legacyInstanceModel "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	legacyInstanceService "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
+	"github.com/EvolutionAPI/evolution-go/pkg/sendstatus"
 	"github.com/google/uuid"
 )
 
@@ -21,7 +22,6 @@ type Service struct {
 	runtime        Runtime
 	runtimeFactory func() (Runtime, error)
 	runtimeMu      sync.Mutex
-	sendTextJobs   sync.Map
 	logger         *slog.Logger
 }
 
@@ -37,21 +37,7 @@ type SendTextInput struct {
 	Delay  int32  `json:"delay"`
 }
 
-type SendTextJobStatus struct {
-	JobID        string     `json:"job_id"`
-	InstanceID   string     `json:"instance_id"`
-	InstanceName string     `json:"instanceName"`
-	Reference    string     `json:"reference"`
-	Number       string     `json:"number"`
-	Text         string     `json:"text"`
-	Status       string     `json:"status"`
-	Error        string     `json:"error,omitempty"`
-	MessageID    string     `json:"message_id,omitempty"`
-	ServerID     int64      `json:"server_id,omitempty"`
-	QueuedAt     time.Time  `json:"queued_at"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-}
+type SendTextJobStatus = sendstatus.JobStatus
 
 func NewService(repo repository.InstanceRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
 	return &Service{
@@ -997,28 +983,10 @@ func (s *Service) ensureRuntime() (Runtime, error) {
 	return s.runtime, nil
 }
 
-type sendTextJobRecord struct {
-	tenantID string
-	status   SendTextJobStatus
-}
-
 func (s *Service) storeSendTextJob(tenantID string, status SendTextJobStatus) {
-	s.sendTextJobs.Store(status.JobID, sendTextJobRecord{
-		tenantID: tenantID,
-		status:   status,
-	})
+	sendstatus.Store(tenantID, status)
 }
 
 func (s *Service) loadSendTextJob(tenantID, jobID string) (SendTextJobStatus, bool) {
-	value, ok := s.sendTextJobs.Load(jobID)
-	if !ok {
-		return SendTextJobStatus{}, false
-	}
-
-	record, ok := value.(sendTextJobRecord)
-	if !ok || record.tenantID != tenantID {
-		return SendTextJobStatus{}, false
-	}
-
-	return record.status, true
+	return sendstatus.Load(tenantID, jobID)
 }

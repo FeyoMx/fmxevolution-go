@@ -196,9 +196,9 @@ func (h *Handler) SendTextJobStatus(c *gin.Context) {
 	payload := gin.H{
 		"job_id":             job.JobID,
 		"status":             job.Status,
-		"delivery_status":    job.Status,
-		"sent":               job.Status == "sent",
-		"delivery_confirmed": false,
+		"delivery_status":    job.DeliveryStatus(),
+		"sent":               job.Sent(),
+		"delivery_confirmed": job.DeliveryConfirmed,
 		"number":             job.Number,
 		"text":               job.Text,
 		"queued_at":          job.QueuedAt,
@@ -213,6 +213,12 @@ func (h *Handler) SendTextJobStatus(c *gin.Context) {
 	}
 	if job.ServerID != 0 {
 		payload["server_id"] = job.ServerID
+	}
+	if job.DeliveredAt != nil {
+		payload["delivered_at"] = job.DeliveredAt
+	}
+	if job.ReadAt != nil {
+		payload["read_at"] = job.ReadAt
 	}
 	if instance != nil {
 		payload["instance_id"] = instance.ID
