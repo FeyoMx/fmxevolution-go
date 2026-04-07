@@ -44,6 +44,15 @@ type PairInput struct {
 	Phone string `json:"phone"`
 }
 
+type HistoryBackfillInput struct {
+	ChatJID   string    `json:"chat_jid"`
+	MessageID string    `json:"message_id"`
+	Timestamp time.Time `json:"timestamp"`
+	IsFromMe  bool      `json:"is_from_me"`
+	IsGroup   bool      `json:"is_group"`
+	Count     int       `json:"count"`
+}
+
 type SendMediaOutput = SendMediaResult
 
 type SendTextJobStatus = sendstatus.JobStatus
@@ -536,6 +545,109 @@ func (s *Service) RuntimeHistoryByID(ctx context.Context, tenantID, instanceID s
 		return instance, nil, err
 	}
 	return instance, events, nil
+}
+
+func (s *Service) BackfillHistory(ctx context.Context, tenantID, reference string, input HistoryBackfillInput) (*repository.Instance, *HistoryBackfillResult, string, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return s.backfillHistoryForInstance(ctx, instance, input)
+}
+
+func (s *Service) BackfillHistoryByID(ctx context.Context, tenantID, instanceID string, input HistoryBackfillInput) (*repository.Instance, *HistoryBackfillResult, string, error) {
+	instance, err := s.Get(ctx, tenantID, instanceID)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return s.backfillHistoryForInstance(ctx, instance, input)
+}
+
+func (s *Service) backfillHistoryForInstance(ctx context.Context, instance *repository.Instance, input HistoryBackfillInput) (*repository.Instance, *HistoryBackfillResult, string, error) {
+	if instance == nil {
+		return nil, nil, "", fmt.Errorf("%w: instance not found", domain.ErrNotFound)
+	}
+
+	request, anchorSource, err := s.resolveHistoryBackfillRequest(ctx, instance, input)
+	if err != nil {
+		return instance, nil, "", err
+	}
+
+	runtime, runtimeErr := s.ensureRuntime()
+	if runtimeErr != nil && s.logger != nil {
+		s.logger.Warn("history backfill runtime unavailable", "instance_id", instance.ID, "error", runtimeErr)
+	}
+	if runtime == nil {
+		return instance, nil, "", fmt.Errorf("%w: runtime unavailable for history backfill", domain.ErrConflict)
+	}
+
+	result, err := runtime.RequestHistorySync(ctx, instance, request)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("history backfill request failed", "instance_id", instance.ID, "chat_jid", request.ChatJID, "error", err)
+		}
+		return instance, nil, anchorSource, err
+	}
+
+	s.recordRuntimeObservation(ctx, instance, s.tryRuntimeSnapshot(ctx, instance), "history_sync_requested", "api", "history backfill requested", nil)
+	return instance, result, anchorSource, nil
+}
+
+func (s *Service) resolveHistoryBackfillRequest(ctx context.Context, instance *repository.Instance, input HistoryBackfillInput) (HistoryBackfillRequest, string, error) {
+	request := HistoryBackfillRequest{
+		ChatJID:   strings.TrimSpace(input.ChatJID),
+		MessageID: strings.TrimSpace(input.MessageID),
+		Timestamp: input.Timestamp.UTC(),
+		IsFromMe:  input.IsFromMe,
+		IsGroup:   input.IsGroup,
+		Count:     input.Count,
+	}
+
+	if request.Count <= 0 {
+		request.Count = 50
+	}
+	if request.Count > 200 {
+		request.Count = 200
+	}
+
+	if request.ChatJID != "" && request.MessageID != "" && !request.Timestamp.IsZero() {
+		if !request.IsGroup {
+			request.IsGroup = strings.HasSuffix(request.ChatJID, "@g.us")
+		}
+		return request, "explicit", nil
+	}
+
+	if request.ChatJID == "" {
+		return HistoryBackfillRequest{}, "", fmt.Errorf("%w: chat_jid is required for history backfill", domain.ErrValidation)
+	}
+	if request.MessageID != "" || !request.Timestamp.IsZero() {
+		return HistoryBackfillRequest{}, "", fmt.Errorf("%w: message_id and timestamp must be provided together", domain.ErrValidation)
+	}
+	if s.history == nil {
+		return HistoryBackfillRequest{}, "", fmt.Errorf("%w: no stored history is available to derive a backfill anchor", domain.ErrConflict)
+	}
+
+	items, err := s.history.List(ctx, instance.TenantID, instance.ID, repository.ConversationMessageFilter{
+		RemoteJID: request.ChatJID,
+		Limit:     1,
+	})
+	if err != nil {
+		return HistoryBackfillRequest{}, "", err
+	}
+	if len(items) == 0 {
+		return HistoryBackfillRequest{}, "", fmt.Errorf("%w: no stored message anchor found for chat_jid", domain.ErrConflict)
+	}
+
+	anchor := items[len(items)-1]
+	if strings.TrimSpace(anchor.ExternalMessageID) == "" || anchor.MessageTimestamp.IsZero() {
+		return HistoryBackfillRequest{}, "", fmt.Errorf("%w: stored history anchor is incomplete", domain.ErrConflict)
+	}
+
+	request.MessageID = strings.TrimSpace(anchor.ExternalMessageID)
+	request.Timestamp = anchor.MessageTimestamp.UTC()
+	request.IsFromMe = strings.EqualFold(anchor.Direction, "outbound")
+	request.IsGroup = strings.HasSuffix(request.ChatJID, "@g.us")
+	return request, "stored_history", nil
 }
 
 func (s *Service) SetWebhook(ctx context.Context, tenantID, reference, webhookURL string, events []string) (*repository.Instance, error) {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	sharedhandler "github.com/EvolutionAPI/evolution-go/internal/handler"
@@ -18,6 +19,24 @@ import (
 
 type Handler struct {
 	service *Service
+}
+
+type historyBackfillRequestPayload struct {
+	ChatJID     string `json:"chat_jid"`
+	Chat        string `json:"chat"`
+	RemoteJID   string `json:"remote_jid"`
+	MessageID   string `json:"message_id"`
+	Timestamp   string `json:"timestamp"`
+	IsFromMe    *bool  `json:"is_from_me"`
+	IsGroup     *bool  `json:"is_group"`
+	Count       int    `json:"count"`
+	MessageInfo *struct {
+		Chat      string `json:"chat"`
+		ID        string `json:"id"`
+		Timestamp string `json:"timestamp"`
+		IsFromMe  *bool  `json:"isFromMe"`
+		IsGroup   *bool  `json:"isGroup"`
+	} `json:"messageInfo"`
 }
 
 func instanceReferenceFromParams(c *gin.Context) string {
@@ -474,6 +493,46 @@ func (h *Handler) RuntimeHistoryByID(c *gin.Context) {
 	sharedhandler.WriteJSON(c, http.StatusOK, buildRuntimeHistoryEnvelope(instance, events))
 }
 
+func (h *Handler) BackfillHistory(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	input, err := decodeHistoryBackfillInput(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   err.Error(),
+			"message": "payload inválido para history backfill",
+		})
+		return
+	}
+
+	instance, result, anchorSource, err := h.service.BackfillHistory(c.Request.Context(), identity.TenantID, c.Param("id"), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildHistoryBackfillEnvelope(instance, result, anchorSource))
+}
+
+func (h *Handler) BackfillHistoryByID(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	input, err := decodeHistoryBackfillInput(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   err.Error(),
+			"message": "payload inválido para history backfill",
+		})
+		return
+	}
+
+	instance, result, anchorSource, err := h.service.BackfillHistoryByID(c.Request.Context(), identity.TenantID, c.Param("instanceID"), input)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+
+	sharedhandler.WriteJSON(c, http.StatusOK, buildHistoryBackfillEnvelope(instance, result, anchorSource))
+}
+
 func (h *Handler) QRCode(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	instance, snapshot, err := h.service.QRCode(c.Request.Context(), identity.TenantID, c.Param("id"))
@@ -860,6 +919,26 @@ func buildRuntimeHistoryEnvelope(instance *repository.Instance, events []reposit
 	}
 }
 
+func buildHistoryBackfillEnvelope(instance *repository.Instance, result *HistoryBackfillResult, anchorSource string) gin.H {
+	payload := buildStatusPayload(instance)
+	payload["accepted"] = result != nil && result.Accepted
+	payload["action"] = "history_backfill"
+	payload["anchor_source"] = strings.TrimSpace(anchorSource)
+	payload["bridge_dependent"] = true
+	payload["historical_ingestion"] = "history_sync"
+	if result != nil {
+		payload["chat_jid"] = result.ChatJID
+		payload["anchor_message_id"] = result.AnchorMessageID
+		payload["anchor_timestamp"] = result.AnchorTimestamp
+		payload["count"] = result.Count
+	}
+
+	return gin.H{
+		"message": "history backfill requested",
+		"data":    payload,
+	}
+}
+
 func buildQRCodePayload(instance *repository.Instance, snapshot *RuntimeSnapshot) gin.H {
 	payload := buildStatusPayload(instance)
 	payload["qrcode"] = ""
@@ -959,6 +1038,87 @@ func decodeJSONText(raw string) any {
 		return raw
 	}
 	return payload
+}
+
+func decodeHistoryBackfillInput(c *gin.Context) (HistoryBackfillInput, error) {
+	var payload historyBackfillRequestPayload
+	rawBody, err := readRequestBody(c)
+	if err != nil {
+		return HistoryBackfillInput{}, err
+	}
+	if len(rawBody) > 0 {
+		if err := json.Unmarshal(rawBody, &payload); err != nil {
+			return HistoryBackfillInput{}, err
+		}
+	}
+
+	input := HistoryBackfillInput{
+		ChatJID:   strings.TrimSpace(firstNonEmptyHandlerString(payload.ChatJID, payload.Chat, payload.RemoteJID)),
+		MessageID: strings.TrimSpace(payload.MessageID),
+		Count:     payload.Count,
+	}
+
+	if payload.IsFromMe != nil {
+		input.IsFromMe = *payload.IsFromMe
+	}
+	if payload.IsGroup != nil {
+		input.IsGroup = *payload.IsGroup
+	}
+
+	if payload.MessageInfo != nil {
+		input.ChatJID = strings.TrimSpace(firstNonEmptyHandlerString(input.ChatJID, payload.MessageInfo.Chat))
+		input.MessageID = strings.TrimSpace(firstNonEmptyHandlerString(input.MessageID, payload.MessageInfo.ID))
+		if payload.MessageInfo.IsFromMe != nil {
+			input.IsFromMe = *payload.MessageInfo.IsFromMe
+		}
+		if payload.MessageInfo.IsGroup != nil {
+			input.IsGroup = *payload.MessageInfo.IsGroup
+		}
+		if timestamp, ok := parseHistoryBackfillTimestamp(payload.MessageInfo.Timestamp); ok {
+			input.Timestamp = timestamp
+		}
+	}
+
+	if timestamp, ok := parseHistoryBackfillTimestamp(payload.Timestamp); ok {
+		input.Timestamp = timestamp
+	}
+	if input.Count <= 0 {
+		input.Count = 50
+	}
+	if input.Count > 200 {
+		input.Count = 200
+	}
+
+	return input, nil
+}
+
+func parseHistoryBackfillTimestamp(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+
+	if value, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if value > 1_000_000_000_000 {
+			return time.UnixMilli(value).UTC(), true
+		}
+		return time.Unix(value, 0).UTC(), true
+	}
+
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return parsed.UTC(), true
+	}
+
+	return time.Time{}, false
+}
+
+func firstNonEmptyHandlerString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (h *Handler) writeInstanceDetails(c *gin.Context, tenantID string, instance *repository.Instance) {

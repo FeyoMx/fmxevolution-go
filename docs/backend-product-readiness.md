@@ -2,7 +2,7 @@
 
 Audited on 2026-04-06.
 
-This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, durable runtime observability, webhook dispatch, CRM, text sending, media sending, audio sending, a live chat list, and tenant-safe message-history search. It is not yet full Evolution Go / Manager parity because several manager integration pages, some runtime/admin surfaces, and full upstream chat-history replay remain partial or unsupported.
+This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, durable runtime observability, webhook dispatch, CRM, text sending, media sending, audio sending, a live chat list, tenant-safe message-history search, and limited replay/backfill ingestion. It is not yet full Evolution Go / Manager parity because several manager integration pages, some runtime/admin surfaces, and full upstream chat-history replay remain partial or unsupported.
 
 ## Overall Readiness
 
@@ -23,7 +23,7 @@ Main gaps:
 - manager-style integration suites still return explicit `501 partial`
 - dashboard metrics still contain placeholder counters
 - runtime parity still depends on the legacy bridge in `pkg/*`
-- inbound history persistence is more reliable, but completeness is still bridge-dependent and not backfilled from older sessions
+- inbound history persistence is more reliable, and bridge-delivered history-sync blobs are now ingested, but completeness is still bridge-dependent and not universally backfilled from arbitrary older sessions
 
 ## Fully Implemented Routes and Features
 
@@ -100,6 +100,8 @@ Implemented routes:
 - `GET /instance/id/:instanceID/runtime`
 - `GET /instance/:id/runtime/history`
 - `GET /instance/id/:instanceID/runtime/history`
+- `POST /instance/:id/history/backfill`
+- `POST /instance/id/:instanceID/history/backfill`
 - `GET /instance/:id/qr`
 - `GET /instance/:id/qrcode`
 - `GET /instance/id/:instanceID/qr`
@@ -119,6 +121,7 @@ Readiness notes:
 - Runtime admin actions stay tenant-safe because the SaaS layer resolves the instance inside the authenticated tenant before invoking the bridge.
 - Logout remains intentionally stricter than legacy-global behavior: the bridge only reports success when there is an active logged-in runtime session to terminate.
 - The durable runtime model records `connected`, `disconnected`, `pairing_started`, `paired`, `reconnect_requested`, `logout`, and `status_observed`.
+- Runtime replay/backfill is limited to sync checkpoints: the backend now persists `history_sync_requested` and `history_sync` when the bridge accepts and ingests a history sync blob.
 - The runtime status endpoint is partially bridge-independent: durable state reads do not require the live bridge, but the optional `live` block still does.
 
 ### Messaging
@@ -152,6 +155,7 @@ Readiness notes:
 - Outbound text, media, and audio sends are persisted into that read model.
 - Inbound runtime events are persisted when the active legacy bridge delivers them into the current process.
 - Inbound webhook dispatch now also publishes into the same read model when the webhook payload includes enough message metadata.
+- History sync replay blobs delivered by WhatsApp are now ingested into the same read model, and the SaaS layer can request an on-demand history sync when given an explicit or stored message anchor.
 - Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
 
 ### Instance event connectors and proxy
@@ -225,7 +229,19 @@ Current limitations:
 
 - durable state is only as complete as the lifecycle events observed by this SaaS process
 - the `live` runtime block still depends on the legacy bridge being reachable
-- there is no historical replay for runtime lifecycle events that happened before observability was added
+- there is no full historical replay for runtime lifecycle events that happened before observability was added; replay currently adds sync checkpoints, not a reconstructable connection timeline
+
+### Replay / backfill parity
+
+Functional routes:
+
+- `POST /instance/:id/history/backfill`
+
+Current limitations:
+
+- backfill requires either an explicit message anchor or an already-persisted message for that chat so the backend can derive one safely
+- the bridge can backfill message history, but not a full older session lifecycle timeline
+- replayed media content is not re-uploaded into SaaS storage; only message metadata and structured payloads are persisted
 
 ### Chat list parity
 

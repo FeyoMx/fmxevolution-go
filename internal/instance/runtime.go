@@ -70,12 +70,30 @@ type RuntimeSnapshot struct {
 	IgnoreStatus bool
 }
 
+type HistoryBackfillRequest struct {
+	ChatJID   string
+	MessageID string
+	Timestamp time.Time
+	IsFromMe  bool
+	IsGroup   bool
+	Count     int
+}
+
+type HistoryBackfillResult struct {
+	Accepted        bool      `json:"accepted"`
+	ChatJID         string    `json:"chat_jid"`
+	AnchorMessageID string    `json:"anchor_message_id"`
+	AnchorTimestamp time.Time `json:"anchor_timestamp"`
+	Count           int       `json:"count"`
+}
+
 type Runtime interface {
 	Connect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	Disconnect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	Reconnect(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	Logout(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	Pair(ctx context.Context, instance *repository.Instance, phone string) (*RuntimeSnapshot, error)
+	RequestHistorySync(ctx context.Context, instance *repository.Instance, input HistoryBackfillRequest) (*HistoryBackfillResult, error)
 	Snapshot(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 	QRCode(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error)
 }
@@ -589,6 +607,61 @@ func (r *LegacyRuntime) Pair(ctx context.Context, instance *repository.Instance,
 		snapshot.Status = "connecting"
 	}
 	return snapshot, nil
+}
+
+func (r *LegacyRuntime) RequestHistorySync(ctx context.Context, instance *repository.Instance, input HistoryBackfillRequest) (*HistoryBackfillResult, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := r.ensureConnectedClient(legacyInstance)
+	if err != nil {
+		return nil, err
+	}
+
+	chatJID, err := types.ParseJID(strings.TrimSpace(input.ChatJID))
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid chat_jid", domain.ErrValidation)
+	}
+	if strings.TrimSpace(input.MessageID) == "" || input.Timestamp.IsZero() {
+		return nil, fmt.Errorf("%w: message anchor is required for history sync", domain.ErrValidation)
+	}
+
+	count := input.Count
+	if count <= 0 {
+		count = 50
+	}
+	if count > 200 {
+		count = 200
+	}
+
+	messageInfo := types.MessageInfo{
+		MessageSource: types.MessageSource{
+			Chat:     chatJID,
+			IsFromMe: input.IsFromMe,
+			IsGroup:  input.IsGroup || chatJID.Server == types.GroupServer,
+		},
+		ID:        strings.TrimSpace(input.MessageID),
+		Timestamp: input.Timestamp.UTC(),
+	}
+
+	request := client.BuildHistorySyncRequest(&messageInfo, count)
+	if _, err := client.SendMessage(ctx, chatJID, request, whatsmeow.SendRequestExtra{Peer: true}); err != nil {
+		return nil, err
+	}
+
+	return &HistoryBackfillResult{
+		Accepted:        true,
+		ChatJID:         chatJID.String(),
+		AnchorMessageID: messageInfo.ID,
+		AnchorTimestamp: messageInfo.Timestamp.UTC(),
+		Count:           count,
+	}, nil
 }
 
 func (r *LegacyRuntime) Snapshot(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {

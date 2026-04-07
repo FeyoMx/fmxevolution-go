@@ -176,6 +176,8 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 		protected.GET("/instance/id/:instanceID/runtime", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.RuntimeStatusByID)
 		protected.GET("/instance/:id/runtime/history", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.RuntimeHistory)
 		protected.GET("/instance/id/:instanceID/runtime/history", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.RuntimeHistoryByID)
+		protected.POST("/instance/:id/history/backfill", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin), instanceHandler.BackfillHistory)
+		protected.POST("/instance/id/:instanceID/history/backfill", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin), instanceHandler.BackfillHistoryByID)
 		protected.GET("/instance/:id/qr", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.QRCode)
 		protected.GET("/instance/:id/qrcode", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.QRCode)
 		protected.GET("/instance/id/:instanceID/qr", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.QRCodeByID)

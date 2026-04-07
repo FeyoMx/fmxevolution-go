@@ -196,9 +196,28 @@ Runtime observability notes:
 
 - `/instance/*/runtime` is the tenant-safe status endpoint for lifecycle UX. It returns a durable status block sourced from the SaaS database and, when the bridge is reachable, an additional `live` block sourced from the current runtime snapshot.
 - Durable lifecycle history currently records `connected`, `disconnected`, `pairing_started`, `paired`, `reconnect_requested`, `logout`, and `status_observed`.
+- Runtime history now also records replay-related events such as `history_sync_requested` and `history_sync` when the bridge accepts and later ingests a WhatsApp history sync blob.
 - `status_observed` is a persisted "last seen" refresh event; it helps the frontend distinguish stale durable state from a recent live poll.
 - `live` data remains bridge-dependent and may be missing when the legacy runtime is unavailable.
 - `runtime/history` is durable per tenant and instance; it does not require the bridge for reads.
+
+### History replay / backfill
+
+| Method | Path | Roles | Request body | Success response | Tenant scope |
+|---|---|---|---|---|---|
+| `POST` | `/instance/:id/history/backfill` | owner, admin | `{ chat_jid, count?, message_id?, timestamp?, is_from_me?, is_group?, messageInfo? }` | `{ accepted, action: "history_backfill", chat_jid, anchor_message_id, anchor_timestamp, count, anchor_source }` | current tenant only |
+| `POST` | `/instance/id/:instanceID/history/backfill` | owner, admin | same | same | current tenant only |
+
+Backfill notes:
+
+- The backend uses the bridge's WhatsApp `HistorySyncRequest` capability and ingests the resulting `HistorySync` blob into the SaaS history model.
+- `chat_jid` is always required.
+- If `message_id` and `timestamp` are provided, they are used as the explicit sync anchor.
+- If no explicit anchor is provided, the backend tries to derive one from the latest already-persisted message for that tenant-scoped instance and chat.
+- `anchor_source` is either `explicit` or `stored_history`.
+- The current durable replay path improves historical completeness primarily for inbound messages.
+- Runtime/session history gains durable replay checkpoints (`history_sync_requested`, `history_sync`), but the bridge does not expose a full reconstructable timeline of older disconnect/connect/logout events.
+- Media binaries are not backfilled into SaaS storage; replayed messages are persisted with structured message payloads and metadata only.
 
 ### Advanced settings
 
@@ -238,6 +257,7 @@ Notes:
 - `messages/search` is now backed by a tenant-safe `ConversationMessage` read model in the SaaS database.
 - Current persistence is strongest for outbound text/media/audio sends.
 - Inbound messages are now persisted through both the active runtime bridge callback path and a tenant-safe inbound webhook fallback path when `DispatchInbound` includes enough message metadata.
+- Inbound historical messages are also persisted when the bridge delivers a `HistorySync` replay blob, including on-demand sync requests triggered from the SaaS backfill route.
 - There is still no historical backfill or full upstream replay for sessions that were not observed by the current SaaS process.
 - media/audio support is currently scoped to the JSON shapes used by the current frontend.
 

@@ -40,6 +40,9 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
   - `reconnect_requested`
   - `logout`
   - `status_observed`
+- replay/backfill checkpoints now also capture:
+  - `history_sync_requested`
+  - `history_sync`
 
 ### Messaging work completed in this branch
 
@@ -65,6 +68,13 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - persisted outbound text, media, and audio sends into that read model
 - wired inbound runtime message events and delivery receipts into the same read model where the active bridge can safely provide them
 - added an inbound webhook fallback path that also publishes into the conversation history registry when enough message metadata is present
+- added history-sync ingestion from the bridge so replayed WhatsApp messages are persisted into the SaaS conversation history model
+- added a tenant-safe backfill trigger on:
+  - `POST /instance/:id/history/backfill`
+  - plus `/instance/id/:instanceID/history/backfill`
+- backfill requests can use:
+  - an explicit anchor (`chat_jid`, `message_id`, `timestamp`)
+  - or the latest already-persisted message for that chat as a derived anchor
 
 ### Connector work already completed
 
@@ -89,12 +99,15 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - runtime parity still depends heavily on the legacy bridge for live snapshots, QR retrieval, and connection actions
 - logout truthfulness is limited by the live bridge: if there is no active logged-in runtime session, the backend now returns an explicit error instead of faking success
 - durable runtime state is only as complete as the events this SaaS process has observed since the feature was introduced
+- history replay improves inbound completeness, but it cannot reconstruct a complete older connect/disconnect/logout timeline from the bridge
+- replayed media payloads do not imply durable SaaS media storage; backfill currently persists metadata and structured message bodies only
 
 ## Files changed in this wave
 
 High-signal files updated for this phase include:
 
 - `internal/instance/chat_media_types.go`
+- `internal/instance/backfill_test.go`
 - `internal/instance/compat_handler.go`
 - `internal/instance/integration_handler.go`
 - `internal/instance/runtime.go`

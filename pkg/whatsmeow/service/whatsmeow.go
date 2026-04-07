@@ -29,6 +29,8 @@ import (
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	waHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync"
+	waWeb "go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -208,6 +210,90 @@ func notifyInboundConversationHistory(instanceID string, evt *events.Message, pa
 		Message:     payload,
 		Timestamp:   evt.Info.Timestamp.UTC(),
 	})
+}
+
+func buildConversationHistoryPayload(evt *events.Message) map[string]interface{} {
+	if evt == nil || evt.Message == nil {
+		return map[string]interface{}{}
+	}
+
+	encoded, err := json.Marshal(evt.Message)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+
+	payload := make(map[string]interface{})
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		return map[string]interface{}{}
+	}
+
+	return payload
+}
+
+func ingestHistorySync(instanceID string, client *whatsmeow.Client, syncData *waHistorySync.HistorySync, logger *logger_wrapper.Logger) {
+	if client == nil || syncData == nil {
+		return
+	}
+
+	totalMessages := 0
+	inboundMessages := 0
+
+	processWebMessage := func(webMsg *waWeb.WebMessageInfo) {
+		if webMsg == nil {
+			return
+		}
+
+		totalMessages++
+		evt, err := client.ParseWebMessage(types.JID{}, webMsg)
+		if err != nil || evt == nil || evt.Message == nil {
+			return
+		}
+
+		parsedMessageType := utils.GetMessageType(evt.Message)
+		if parsedMessageType == "ignore" || strings.HasPrefix(parsedMessageType, "unknown_protocol_") {
+			return
+		}
+		if evt.Info.IsFromMe {
+			return
+		}
+
+		inboundMessages++
+		dataMap := map[string]interface{}{
+			"pushName": evt.Info.PushName,
+			"Message":  buildConversationHistoryPayload(evt),
+		}
+		notifyInboundConversationHistory(instanceID, evt, parsedMessageType, dataMap)
+	}
+
+	for _, conversation := range syncData.GetConversations() {
+		for _, item := range conversation.GetMessages() {
+			processWebMessage(item.GetMessage())
+		}
+	}
+	for _, statusMessage := range syncData.GetStatusV3Messages() {
+		processWebMessage(statusMessage)
+	}
+
+	connected := client.IsConnected()
+	loggedIn := client.IsLoggedIn()
+	status := "close"
+	if connected && loggedIn {
+		status = "open"
+	}
+
+	payload := map[string]any{
+		"sync_type":          syncData.GetSyncType().String(),
+		"chunk_order":        syncData.GetChunkOrder(),
+		"progress":           syncData.GetProgress(),
+		"conversation_count": len(syncData.GetConversations()),
+		"messages_total":     totalMessages,
+		"inbound_messages":   inboundMessages,
+	}
+	notifyRuntimeLifecycle(instanceID, "history_sync", status, "history sync ingested", connected, loggedIn, false, "", "", payload)
+
+	if logger != nil {
+		logger.LogInfo("[%s] History sync ingested type=%s conversations=%d total_messages=%d inbound_messages=%d", instanceID, syncData.GetSyncType().String(), len(syncData.GetConversations()), totalMessages, inboundMessages)
+	}
 }
 
 func normalizeConversationMessageType(parsedMessageType string, payload map[string]interface{}) string {
@@ -1823,6 +1909,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postMap["event"] = "HistorySync"
 
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] History sync event received %+v", mycli.userID, evt.Data.SyncType)
+		ingestHistorySync(mycli.userID, mycli.WAClient, evt.Data, mycli.loggerWrapper.GetLogger(mycli.userID))
 	case *events.AppState:
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] App state event received %+v", mycli.userID, evt)
 	case *events.LoggedOut:

@@ -62,6 +62,12 @@
   - `/instance/:id/runtime/history`
   - plus `/instance/id/:instanceID/*` aliases
 - Added normalized lifecycle persistence for `connected`, `disconnected`, `pairing_started`, `paired`, `reconnect_requested`, `logout`, and `status_observed`
+- Added replay/backfill persistence for bridge-delivered WhatsApp `HistorySync` blobs
+- Added tenant-safe history backfill trigger routes on:
+  - `/instance/:id/history/backfill`
+  - plus `/instance/id/:instanceID/history/backfill`
+- Added safe anchor resolution for backfill requests using either an explicit message anchor or the latest already-persisted message for that tenant-scoped chat
+- Added runtime replay checkpoints `history_sync_requested` and `history_sync` to the durable runtime history model
 - Added bridge lifecycle publishers from WhatsMeow into the SaaS runtime observability model
 - Added inbound webhook fallback publishing into the chat-history registry to improve inbound persistence reliability when webhook dispatch carries enough message metadata
 
@@ -81,3 +87,4 @@
 - Added `docs/backend-parity-report.md` and `docs/backend-parity-plan.md` for phased parity work
 - Message-history parity is now usable, but inbound completeness is still partial because there is no backfill from older sessions or full upstream replay into the SaaS read model
 - Durable runtime status/history reads no longer require the live bridge, but live snapshots and connection actions still do
+- Replay/backfill improves inbound message completeness, but it still cannot reconstruct a full older connection/logout timeline from the bridge alone
