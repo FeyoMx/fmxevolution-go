@@ -101,3 +101,10 @@
 - Hardened tenant AI settings to the currently supported `openai`-compatible provider surface
 - Hardened broadcast validation by rejecting negative pacing/retry values and clamping list limits
 - Added broadcast queue logging with tenant and instance context for operator troubleshooting
+
+### Release candidate docs
+
+- Added `docs/mvp-scope.md` to freeze the supported MVP surface and clarify what is partial or out of scope
+- Added `docs/qa-checklist.md` as a concise manual QA checklist for release candidate validation
+- Added `docs/known-issues.md` to document current MVP risks for pilot use
+- Clarified release-readiness posture around `GET /healthz`, bridge dependence, rate-limit behavior, and broadcast limitations
