@@ -17,6 +17,7 @@ Strong areas:
 - webhook management and tenant-safe dispatch
 - websocket, rabbitmq, and proxy instance settings
 - CRM contacts/tags/notes
+- shared error DTOs plus clearer operator-facing runtime/backfill responses across the supported MVP routes
 
 Main gaps:
 
@@ -45,6 +46,8 @@ Readiness notes:
 - Tenant API key auth is implemented.
 - Legacy instance token fallback auth is implemented.
 - Tenant scoping is enforced by auth plus tenant middleware.
+- `GET /auth/me` now returns both `api_key` and `api_key_auth` for frontend compatibility.
+- `POST /auth/logout` is a stateless acknowledgement and now returns `accepted: true`.
 
 ### Dashboard
 
@@ -70,6 +73,7 @@ Readiness notes:
 
 - Tenant AI settings and per-instance toggles are implemented.
 - AI replies are generated and emitted through outbound webhook events.
+- Tenant AI settings are intentionally constrained to `openai`-compatible providers in the supported MVP surface.
 - This is still weaker than full manager/runtime bot parity because this SaaS layer does not own all legacy bot CRUD suites.
 
 ### Instances and runtime lifecycle
@@ -123,6 +127,7 @@ Readiness notes:
 - The durable runtime model records `connected`, `disconnected`, `pairing_started`, `paired`, `reconnect_requested`, `logout`, and `status_observed`.
 - Runtime replay/backfill is limited to sync checkpoints: the backend now persists `history_sync_requested` and `history_sync` when the bridge accepts and ingests a history sync blob.
 - The runtime status endpoint is partially bridge-independent: durable state reads do not require the live bridge, but the optional `live` block still does.
+- Runtime action and observability envelopes now include clearer operator-facing fields so the UI can distinguish durable reads from bridge-dependent work.
 
 ### Messaging
 
@@ -157,6 +162,7 @@ Readiness notes:
 - Inbound webhook dispatch now also publishes into the same read model when the webhook payload includes enough message metadata.
 - History sync replay blobs delivered by WhatsApp are now ingested into the same read model, and the SaaS layer can request an on-demand history sync when given an explicit or stored message anchor.
 - Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
+- Runtime/history/chat validation now fails more honestly for malformed backfill timestamps and other malformed operator payloads.
 
 ### Instance event connectors and proxy
 
@@ -186,6 +192,11 @@ Implemented routes:
 - `POST /contacts/:id/notes`
 - `POST /contacts/:id/tags`
 
+Readiness notes:
+
+- Contact phone values are normalized to digits only.
+- Contact create and update now reject phone payloads that normalize to an empty value.
+
 ### Broadcast
 
 Implemented routes:
@@ -197,6 +208,7 @@ Implemented routes:
 Readiness notes:
 
 - Queueing, tenant scoping, and worker claiming are implemented.
+- Broadcast create now rejects negative delay/rate/retry values, and broadcast list clamps `limit` to a bounded range.
 - Delivery execution is still partial because WhatsApp send-out is still a stub.
 
 ### Webhooks
@@ -333,6 +345,7 @@ These capabilities are still missing from the active SaaS surface even though th
 
 - core runtime behavior still depends on the legacy bridge in `pkg/*`
 - message history now uses a tenant-safe SaaS repository, but inbound capture still depends on active bridge events and receipts
+- chat list still depends on live bridge queries and can surface upstream rate-limit behavior
 - many manager integration suites are represented only as explicit `501` placeholders
 - dashboard metrics still contain placeholders
 - Swagger artifacts remain stale relative to `cmd/api`
@@ -340,8 +353,8 @@ These capabilities are still missing from the active SaaS surface even though th
 
 ## Next Recommended Backend Priorities
 
-1. Add durable inbound/backfill parity so message history is not limited to events seen by the current SaaS process.
-2. Add durable runtime session observability so reconnect/logout/pair UX can report richer state without relying entirely on the live legacy bridge.
-3. Decide which manager integration suites are true product priorities and implement only those with tenant-safe repositories.
-4. Replace placeholder dashboard metrics with real aggregates or label them partial in UI.
-5. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.
+1. Add operator-safe throttling or caching around live chat-list queries so bridge rate limits do not degrade MVP UX.
+2. Tighten targeted integration tests around auth, runtime actions, message search, and backfill envelopes.
+3. Replace placeholder dashboard metrics with real aggregates or label them partial in UI.
+4. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.
+5. Decide which manager integration suites are true product priorities and keep the rest explicitly unsupported.

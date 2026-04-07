@@ -84,6 +84,21 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
   - proxy
 - kept unsupported suites explicit as `501 partial` instead of pretending parity
 
+### MVP hardening pass completed
+
+- standardized supported-route error responses around `{ error, message, code }`
+- added shared validation-error envelopes for auth, tenant, CRM, broadcast, AI, and instance runtime handlers
+- hardened tenant create input normalization and minimum admin password validation
+- hardened AI tenant settings to the currently supported `openai`-compatible provider surface
+- hardened CRM phone validation so empty digit-only payloads fail fast instead of creating ambiguous contacts
+- hardened runtime/backfill input parsing so malformed timestamps fail honestly instead of being silently ignored
+- added clearer operator-facing runtime action and observability fields:
+  - `operator_message`
+  - `bridge_dependent`
+  - `status_refresh`
+- clamped broadcast list limits and rejected negative broadcast pacing/retry values
+- added a broadcast queue log entry with tenant/instance context for operator troubleshooting
+
 ## Why these changes were made
 
 - to move the fork toward practical Evolution Go / Manager parity without reviving unsafe global legacy routes
@@ -101,22 +116,34 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - durable runtime state is only as complete as the events this SaaS process has observed since the feature was introduced
 - history replay improves inbound completeness, but it cannot reconstruct a complete older connect/disconnect/logout timeline from the bridge
 - replayed media payloads do not imply durable SaaS media storage; backfill currently persists metadata and structured message bodies only
+- some large multi-package `go test` runs can still hit Windows linker memory limits in this environment, so targeted package verification is more reliable than one giant test invocation
 
 ## Files changed in this wave
 
 High-signal files updated for this phase include:
 
+- `internal/ai/handler.go`
+- `internal/ai/service.go`
+- `internal/auth/handler.go`
+- `internal/broadcast/handler.go`
+- `internal/broadcast/service.go`
+- `internal/crm/handler.go`
+- `internal/crm/service.go`
+- `internal/handler/http.go`
 - `internal/instance/chat_media_types.go`
 - `internal/instance/backfill_test.go`
 - `internal/instance/compat_handler.go`
 - `internal/instance/integration_handler.go`
 - `internal/instance/runtime.go`
 - `internal/instance/service.go`
+- `internal/instance/handler.go`
 - `internal/repository/gorm.go`
 - `internal/repository/interfaces.go`
 - `internal/repository/models.go`
 - `internal/server/server.go`
 - `internal/service/app.go`
+- `internal/tenant/handler.go`
+- `internal/tenant/service.go`
 - `internal/webhook/service.go`
 - `internal/webhook/service_test.go`
 - `migrations/000001_saas_core.sql`
@@ -157,3 +184,4 @@ High-signal files updated for this phase include:
 - code was reformatted with `gofmt`
 - `go build -o api2.exe ./cmd/api` passed
 - `go test ./internal/instance ./internal/broadcast ./pkg/sendstatus` passed
+- the MVP hardening pass is additionally verified with targeted package tests and a fresh `go build -o api.exe ./cmd/api`

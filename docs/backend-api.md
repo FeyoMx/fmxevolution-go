@@ -45,8 +45,18 @@ Tenant scope is derived from the authenticated identity, not from arbitrary path
 Error body shape:
 
 ```json
-{ "error": "message" }
+{
+  "error": "validation failed: message",
+  "message": "operator-facing summary",
+  "code": "validation_failed"
+}
 ```
+
+Notes:
+
+- `error` carries the detailed route or domain error
+- `message` carries the stable operator-facing explanation
+- `code` is normalized to values such as `validation_failed`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `timeout`, and `internal_error`
 
 ## Public Routes
 
@@ -61,8 +71,8 @@ Error body shape:
 
 | Method | Path | Roles | Request body | Success response | Tenant scope |
 |---|---|---|---|---|---|
-| `GET` | `/auth/me` | owner, admin, agent | none | `{ user_id, tenant_id, email, role, api_key }` | authenticated tenant |
-| `POST` | `/auth/logout` | owner, admin, agent | none | `{ "message": "logout exitoso" }` | stateless acknowledgement only |
+| `GET` | `/auth/me` | owner, admin, agent | none | `{ user_id, tenant_id, email, role, api_key, api_key_auth }` | authenticated tenant |
+| `POST` | `/auth/logout` | owner, admin, agent | none | `{ "message": "logout exitoso", "accepted": true }` | stateless acknowledgement only |
 
 ## Tenant
 
@@ -100,6 +110,7 @@ Notes:
 Notes:
 
 - AI reply generation is partial: generated replies are emitted as outbound webhook events, not sent directly to WhatsApp by this SaaS layer.
+- Tenant AI settings currently accept only `openai`-compatible providers in the SaaS MVP.
 
 ## Instances
 
@@ -159,6 +170,7 @@ Runtime admin notes:
 - `pair` accepts either `phone` or `number` and returns the pairing code in both `code` and `pairingCode`.
 - `logout` is intentionally honest about bridge limits: it requires an active logged-in runtime session and returns an error instead of pretending to clear a session that the bridge cannot prove exists.
 - these action responses reuse the same top-level-plus-`data` compatibility envelope as `status`/`qr`, so the frontend can refresh operational state from the action response without an immediate second request.
+- runtime action envelopes now also include `operator_message`, `bridge_dependent`, and `status_refresh` fields for clearer operator UX.
 
 ### Status and QR
 
@@ -200,6 +212,7 @@ Runtime observability notes:
 - `status_observed` is a persisted "last seen" refresh event; it helps the frontend distinguish stale durable state from a recent live poll.
 - `live` data remains bridge-dependent and may be missing when the legacy runtime is unavailable.
 - `runtime/history` is durable per tenant and instance; it does not require the bridge for reads.
+- runtime and backfill envelopes include explicit operator-facing text so the frontend can distinguish durable reads from live bridge work.
 
 ### History replay / backfill
 
@@ -364,6 +377,7 @@ Validation notes:
 
 - contact create requires `name` and `phone`
 - phone numbers are normalized to digits only
+- phone payloads that normalize to an empty digit string are rejected with `400 validation_failed`
 - duplicate phone per tenant returns `409`
 
 ## Broadcasts
@@ -377,6 +391,8 @@ Validation notes:
 Rate limiting:
 
 - `POST /broadcast` is wrapped by the broadcast limiter
+- `GET /broadcast` clamps `limit` to a safe range of `1..200`
+- `POST /broadcast` rejects negative `delay_sec`, `rate_per_hour`, and `max_attempts`
 
 Current limitation:
 

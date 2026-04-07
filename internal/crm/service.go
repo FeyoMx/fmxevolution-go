@@ -48,6 +48,9 @@ func (s *Service) CreateContact(ctx context.Context, tenantID string, input Crea
 	}
 
 	normalizedPhone := normalizePhone(input.Phone)
+	if normalizedPhone == "" {
+		return nil, fmt.Errorf("%w: phone must contain digits", domain.ErrValidation)
+	}
 	if existing, err := s.repo.FindContactByPhone(ctx, tenantID, normalizedPhone); err == nil && existing != nil {
 		return nil, fmt.Errorf("%w: contact already exists for phone", domain.ErrConflict)
 	} else if err != nil && !isNotFound(err) {
@@ -102,6 +105,9 @@ func (s *Service) UpdateContact(ctx context.Context, tenantID, contactID string,
 	}
 	if input.Phone != "" {
 		normalizedPhone := normalizePhone(input.Phone)
+		if normalizedPhone == "" {
+			return nil, fmt.Errorf("%w: phone must contain digits", domain.ErrValidation)
+		}
 		if existing, lookupErr := s.repo.FindContactByPhone(ctx, tenantID, normalizedPhone); lookupErr == nil && existing != nil && existing.ID != contact.ID {
 			return nil, fmt.Errorf("%w: contact already exists for phone", domain.ErrConflict)
 		} else if lookupErr != nil && !isNotFound(lookupErr) {

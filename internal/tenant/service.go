@@ -34,11 +34,19 @@ func NewService(tenants repository.TenantRepository, users repository.UserReposi
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*CreateOutput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.Slug = strings.TrimSpace(input.Slug)
+	input.AdminName = strings.TrimSpace(input.AdminName)
+	input.AdminEmail = strings.ToLower(strings.TrimSpace(input.AdminEmail))
+	input.AdminPassword = strings.TrimSpace(input.AdminPassword)
 	if input.Name == "" || input.Slug == "" || input.AdminEmail == "" || input.AdminPassword == "" {
 		return nil, fmt.Errorf("%w: missing tenant fields", domain.ErrValidation)
 	}
+	if len(input.AdminPassword) < 8 {
+		return nil, fmt.Errorf("%w: admin_password must be at least 8 characters", domain.ErrValidation)
+	}
 
-	slug := strings.ToLower(strings.TrimSpace(input.Slug))
+	slug := strings.ToLower(input.Slug)
 	if _, err := s.tenants.GetBySlug(ctx, slug); err == nil {
 		return nil, fmt.Errorf("%w: tenant slug already exists", domain.ErrConflict)
 	}
@@ -70,7 +78,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*CreateOutput,
 
 	user := &repository.User{
 		TenantID:     tenant.ID,
-		Email:        strings.ToLower(strings.TrimSpace(input.AdminEmail)),
+		Email:        input.AdminEmail,
 		PasswordHash: passwordHash,
 		Name:         input.AdminName,
 		Role:         auth.RoleAdmin,

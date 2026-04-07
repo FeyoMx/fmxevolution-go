@@ -20,7 +20,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Create(c *gin.Context) {
 	var input CreateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		sharedhandler.WriteValidationError(c, "payload inválido para broadcast", err)
 		return
 	}
 
@@ -36,6 +36,12 @@ func (h *Handler) Create(c *gin.Context) {
 func (h *Handler) List(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
 	jobs, err := h.service.List(c.Request.Context(), identity.TenantID, limit)
 	if err != nil {
 		sharedhandler.WriteError(c, err)

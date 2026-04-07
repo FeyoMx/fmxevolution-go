@@ -56,12 +56,12 @@ type InstanceSettingsInput struct {
 }
 
 type IncomingMessageInput struct {
-	EventType        string
-	InstanceID       string
-	ConversationKey  string
-	MessageID        string
-	MessageText      string
-	Metadata         map[string]any
+	EventType       string
+	InstanceID      string
+	ConversationKey string
+	MessageID       string
+	MessageText     string
+	Metadata        map[string]any
 }
 
 type DispatchInput struct {
@@ -148,13 +148,26 @@ func (s *Service) ConfigureTenant(ctx context.Context, tenantID string, input Te
 		return nil, fmt.Errorf("%w: tenant_id is required", domain.ErrValidation)
 	}
 
+	provider := strings.ToLower(strings.TrimSpace(defaultString(input.Provider, "openai")))
+	if provider != "openai" {
+		return nil, fmt.Errorf("%w: only openai-compatible provider is currently supported", domain.ErrValidation)
+	}
+	model := strings.TrimSpace(defaultString(input.Model, s.cfg.Model))
+	baseURL := strings.TrimSpace(defaultString(input.BaseURL, s.cfg.BaseURL))
+	if model == "" {
+		return nil, fmt.Errorf("%w: model is required", domain.ErrValidation)
+	}
+	if baseURL == "" {
+		return nil, fmt.Errorf("%w: base_url is required", domain.ErrValidation)
+	}
+
 	settings := &repository.AISettings{
 		TenantID:     tenantID,
 		Enabled:      input.Enabled,
 		AutoReply:    input.AutoReply,
-		Provider:     defaultString(input.Provider, "openai"),
-		Model:        defaultString(input.Model, s.cfg.Model),
-		BaseURL:      defaultString(input.BaseURL, s.cfg.BaseURL),
+		Provider:     provider,
+		Model:        model,
+		BaseURL:      baseURL,
 		SystemPrompt: strings.TrimSpace(input.SystemPrompt),
 	}
 	if err := s.repo.Upsert(ctx, settings); err != nil {

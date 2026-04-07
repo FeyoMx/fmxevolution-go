@@ -23,10 +23,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Login(c *gin.Context) {
 	input, err := decodeLoginInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido; usa tenant_slug, email y password",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido; usa tenant_slug, email y password", err)
 		return
 	}
 
@@ -42,10 +39,7 @@ func (h *Handler) Login(c *gin.Context) {
 func (h *Handler) Refresh(c *gin.Context) {
 	input, err := decodeRefreshInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido; usa refresh_token",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido; usa refresh_token", err)
 		return
 	}
 
@@ -66,17 +60,19 @@ func (h *Handler) Me(c *gin.Context) {
 	}
 
 	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{
-		"user_id":   identity.UserID,
-		"tenant_id": identity.TenantID,
-		"email":     identity.Email,
-		"role":      identity.Role,
-		"api_key":   identity.APIKey,
+		"user_id":      identity.UserID,
+		"tenant_id":    identity.TenantID,
+		"email":        identity.Email,
+		"role":         identity.Role,
+		"api_key":      identity.APIKey,
+		"api_key_auth": identity.APIKey,
 	})
 }
 
 func (h *Handler) Logout(c *gin.Context) {
 	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{
-		"message": "logout exitoso",
+		"message":  "logout exitoso",
+		"accepted": true,
 	})
 }
 

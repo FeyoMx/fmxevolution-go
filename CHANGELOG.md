@@ -17,6 +17,7 @@
 - Added RBAC role checks for `owner`, `admin`, and `agent`
 - Added tenant middleware to enforce authenticated tenant context and optional tenant header matching
 - Added fallback auth that accepts legacy instance tokens and maps them to the owning tenant identity
+- Hardened supported MVP auth responses so `/auth/me` returns both `api_key` and `api_key_auth`, and `/auth/logout` returns an explicit `accepted` acknowledgement
 
 ### SaaS domain modules
 
@@ -70,6 +71,8 @@
 - Added runtime replay checkpoints `history_sync_requested` and `history_sync` to the durable runtime history model
 - Added bridge lifecycle publishers from WhatsMeow into the SaaS runtime observability model
 - Added inbound webhook fallback publishing into the chat-history registry to improve inbound persistence reliability when webhook dispatch carries enough message metadata
+- Hardened supported MVP runtime/chat responses with normalized `{ error, message, code }` error DTOs and clearer operator-facing runtime/backfill envelopes
+- Hardened history backfill validation so malformed timestamps fail explicitly instead of being silently ignored
 
 ### Configuration and examples
 
@@ -80,6 +83,7 @@
 ### Known partial areas
 
 - Broadcast delivery is still a processor stub and is not yet wired to WhatsApp sending
+- Chat list remains live-bridge-backed and can still inherit upstream rate limits
 - Redis rate limiting is not implemented yet
 - Swagger artifacts under `docs/` still represent older/legacy API surfaces and remain out of sync with `cmd/api`
 - The SaaS API still depends on the legacy engine for QR, connection lifecycle, and advanced instance settings
@@ -88,3 +92,12 @@
 - Message-history parity is now usable, but inbound completeness is still partial because there is no backfill from older sessions or full upstream replay into the SaaS read model
 - Durable runtime status/history reads no longer require the live bridge, but live snapshots and connection actions still do
 - Replay/backfill improves inbound message completeness, but it still cannot reconstruct a full older connection/logout timeline from the bridge alone
+
+### MVP hardening
+
+- Standardized supported-route validation and error responses around `{ error, message, code }`
+- Hardened tenant create validation with trimmed inputs and a minimum admin password length
+- Hardened CRM phone validation to reject values that normalize to no digits
+- Hardened tenant AI settings to the currently supported `openai`-compatible provider surface
+- Hardened broadcast validation by rejecting negative pacing/retry values and clamping list limits
+- Added broadcast queue logging with tenant and instance context for operator troubleshooting

@@ -53,10 +53,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Create(c *gin.Context) {
 	input, err := decodeCreateInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido; usa name o instanceName",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido; usa name o instanceName", err)
 		return
 	}
 
@@ -130,10 +127,7 @@ func (h *Handler) UpdateAdvancedSettings(c *gin.Context) {
 
 	var settings legacyInstanceModel.AdvancedSettings
 	if err := c.ShouldBindJSON(&settings); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido para advanced settings",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido para advanced settings", err)
 		return
 	}
 
@@ -169,10 +163,7 @@ func (h *Handler) SendText(c *gin.Context) {
 
 	var input SendTextInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido para envío de texto",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido para envío de texto", err)
 		return
 	}
 
@@ -497,10 +488,7 @@ func (h *Handler) BackfillHistory(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodeHistoryBackfillInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido para history backfill",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido para history backfill", err)
 		return
 	}
 
@@ -517,10 +505,7 @@ func (h *Handler) BackfillHistoryByID(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodeHistoryBackfillInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido para history backfill",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido para history backfill", err)
 		return
 	}
 
@@ -559,10 +544,7 @@ func (h *Handler) Pair(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodePairInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido para pairing",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido para pairing", err)
 		return
 	}
 
@@ -584,10 +566,7 @@ func (h *Handler) PairByID(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodePairInput(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "payload inválido para pairing",
-		})
+		sharedhandler.WriteValidationError(c, "payload inválido para pairing", err)
 		return
 	}
 
@@ -794,6 +773,9 @@ func (h *Handler) writeNormalizedQRCode(c *gin.Context, statusCode int, instance
 func (h *Handler) writeRuntimeActionEnvelope(c *gin.Context, statusCode int, message string, instance *repository.Instance, snapshot *RuntimeSnapshot, extras gin.H) {
 	payload := buildStatusPayload(instance)
 	enrichPayloadWithSnapshot(payload, snapshot)
+	payload["operator_message"] = message
+	payload["bridge_dependent"] = true
+	payload["status_refresh"] = true
 	for key, value := range extras {
 		payload[key] = value
 	}
@@ -880,6 +862,7 @@ func buildRuntimeStatusEnvelope(instance *repository.Instance, state *repository
 		"history_durable":          true,
 		"bridge_required_for_live": true,
 	}
+	payload["operator_message"] = "runtime status reflects durable SaaS state plus optional live bridge state"
 
 	return gin.H{
 		"message": "success",
@@ -912,6 +895,7 @@ func buildRuntimeHistoryEnvelope(instance *repository.Instance, events []reposit
 	payload["history_count"] = len(items)
 	payload["history_durable"] = true
 	payload["live_bridge_required_for_new_events"] = true
+	payload["operator_message"] = "runtime history is durable for stored events; new live events still depend on the bridge"
 
 	return gin.H{
 		"message": "success",
@@ -926,6 +910,7 @@ func buildHistoryBackfillEnvelope(instance *repository.Instance, result *History
 	payload["anchor_source"] = strings.TrimSpace(anchorSource)
 	payload["bridge_dependent"] = true
 	payload["historical_ingestion"] = "history_sync"
+	payload["operator_message"] = "history backfill was requested from the live bridge; durable history will update only if the bridge returns a sync blob"
 	if result != nil {
 		payload["chat_jid"] = result.ChatJID
 		payload["anchor_message_id"] = result.AnchorMessageID
@@ -1074,12 +1059,20 @@ func decodeHistoryBackfillInput(c *gin.Context) (HistoryBackfillInput, error) {
 		if payload.MessageInfo.IsGroup != nil {
 			input.IsGroup = *payload.MessageInfo.IsGroup
 		}
-		if timestamp, ok := parseHistoryBackfillTimestamp(payload.MessageInfo.Timestamp); ok {
+		if strings.TrimSpace(payload.MessageInfo.Timestamp) != "" {
+			timestamp, ok := parseHistoryBackfillTimestamp(payload.MessageInfo.Timestamp)
+			if !ok {
+				return HistoryBackfillInput{}, fmt.Errorf("%w: invalid messageInfo.timestamp", domain.ErrValidation)
+			}
 			input.Timestamp = timestamp
 		}
 	}
 
-	if timestamp, ok := parseHistoryBackfillTimestamp(payload.Timestamp); ok {
+	if strings.TrimSpace(payload.Timestamp) != "" {
+		timestamp, ok := parseHistoryBackfillTimestamp(payload.Timestamp)
+		if !ok {
+			return HistoryBackfillInput{}, fmt.Errorf("%w: invalid timestamp", domain.ErrValidation)
+		}
 		input.Timestamp = timestamp
 	}
 	if input.Count <= 0 {

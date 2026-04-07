@@ -39,7 +39,7 @@ func (h *Handler) GetContact(c *gin.Context) {
 func (h *Handler) CreateContact(c *gin.Context) {
 	var input CreateContactInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		sharedhandler.WriteValidationError(c, "payload inválido para contacto", err)
 		return
 	}
 
@@ -55,7 +55,7 @@ func (h *Handler) CreateContact(c *gin.Context) {
 func (h *Handler) UpdateContact(c *gin.Context) {
 	var input UpdateContactInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		sharedhandler.WriteValidationError(c, "payload inválido para actualización de contacto", err)
 		return
 	}
 
@@ -71,7 +71,7 @@ func (h *Handler) UpdateContact(c *gin.Context) {
 func (h *Handler) AddNote(c *gin.Context) {
 	var input CreateNoteInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		sharedhandler.WriteValidationError(c, "payload inválido para nota", err)
 		return
 	}
 
@@ -87,7 +87,7 @@ func (h *Handler) AddNote(c *gin.Context) {
 func (h *Handler) AssignTags(c *gin.Context) {
 	var input AssignTagsInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		sharedhandler.WriteValidationError(c, "payload inválido para tags", err)
 		return
 	}
 

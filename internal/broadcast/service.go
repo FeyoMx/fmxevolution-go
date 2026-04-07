@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,8 +94,19 @@ func (s *Service) Start(ctx context.Context) {
 }
 
 func (s *Service) Create(ctx context.Context, tenantID string, input CreateInput) (*repository.BroadcastJob, error) {
+	input.InstanceID = strings.TrimSpace(input.InstanceID)
+	input.Message = strings.TrimSpace(input.Message)
 	if input.InstanceID == "" || input.Message == "" {
 		return nil, fmt.Errorf("%w: instance_id and message are required", domain.ErrValidation)
+	}
+	if input.DelaySec < 0 {
+		return nil, fmt.Errorf("%w: delay_sec cannot be negative", domain.ErrValidation)
+	}
+	if input.RatePerHour < 0 {
+		return nil, fmt.Errorf("%w: rate_per_hour cannot be negative", domain.ErrValidation)
+	}
+	if input.MaxAttempts < 0 {
+		return nil, fmt.Errorf("%w: max_attempts cannot be negative", domain.ErrValidation)
 	}
 
 	if _, err := s.instances.GetByID(ctx, tenantID, input.InstanceID); err != nil {
@@ -130,6 +142,7 @@ func (s *Service) Create(ctx context.Context, tenantID string, input CreateInput
 	if err := s.repo.Create(ctx, job); err != nil {
 		return nil, err
 	}
+	s.logger.Info("broadcast job queued", "tenant_id", tenantID, "instance_id", input.InstanceID, "message_length", len(input.Message), "available_at", availableAt)
 	return job, nil
 }
 
@@ -144,6 +157,9 @@ func (s *Service) Get(ctx context.Context, tenantID, jobID string) (*repository.
 func (s *Service) List(ctx context.Context, tenantID string, limit int) ([]repository.BroadcastJob, error) {
 	if limit <= 0 {
 		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
 	}
 	return s.repo.ListByTenant(ctx, tenantID, limit)
 }

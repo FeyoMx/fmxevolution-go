@@ -29,7 +29,7 @@ func (h *Handler) GetTenantSettings(c *gin.Context) {
 func (h *Handler) ConfigureTenant(c *gin.Context) {
 	var input TenantSettingsInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		sharedhandler.WriteValidationError(c, "payload inválido para AI tenant settings", err)
 		return
 	}
 
@@ -59,7 +59,7 @@ func (h *Handler) GetInstanceSettings(c *gin.Context) {
 func (h *Handler) ConfigureInstance(c *gin.Context) {
 	var input InstanceSettingsInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		sharedhandler.WriteValidationError(c, "payload inválido para AI instance settings", err)
 		return
 	}
 
