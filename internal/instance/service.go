@@ -248,10 +248,7 @@ func (s *Service) Reconnect(ctx context.Context, tenantID, reference string) (*r
 
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
-		if ensureErr != nil {
-			return instance, nil, ensureErr
-		}
-		return instance, nil, fmt.Errorf("runtime unavailable")
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(ensureErr, "reconnect")
 	}
 
 	snapshot, runtimeErr := runtime.Reconnect(ctx, instance)
@@ -259,7 +256,7 @@ func (s *Service) Reconnect(ctx context.Context, tenantID, reference string) (*r
 		if s.logger != nil {
 			s.logger.Error("reconnect legacy runtime failed", "instance_id", instance.ID, "reference", reference, "error", runtimeErr)
 		}
-		return instance, nil, runtimeErr
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(runtimeErr, "reconnect")
 	}
 
 	s.recordRuntimeObservation(ctx, instance, snapshot, "reconnect_requested", "api", "instance reconnect queued", nil)
@@ -278,10 +275,7 @@ func (s *Service) ReconnectByID(ctx context.Context, tenantID, instanceID string
 
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
-		if ensureErr != nil {
-			return instance, nil, ensureErr
-		}
-		return instance, nil, fmt.Errorf("runtime unavailable")
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(ensureErr, "reconnect")
 	}
 
 	snapshot, runtimeErr := runtime.Reconnect(ctx, instance)
@@ -289,7 +283,7 @@ func (s *Service) ReconnectByID(ctx context.Context, tenantID, instanceID string
 		if s.logger != nil {
 			s.logger.Error("reconnect legacy runtime failed", "instance_id", instance.ID, "error", runtimeErr)
 		}
-		return instance, nil, runtimeErr
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(runtimeErr, "reconnect")
 	}
 
 	s.recordRuntimeObservation(ctx, instance, snapshot, "reconnect_requested", "api", "instance reconnect queued", nil)
@@ -308,10 +302,7 @@ func (s *Service) Logout(ctx context.Context, tenantID, reference string) (*repo
 
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
-		if ensureErr != nil {
-			return instance, nil, ensureErr
-		}
-		return instance, nil, fmt.Errorf("runtime unavailable")
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(ensureErr, "logout")
 	}
 
 	snapshot, runtimeErr := runtime.Logout(ctx, instance)
@@ -319,7 +310,7 @@ func (s *Service) Logout(ctx context.Context, tenantID, reference string) (*repo
 		if s.logger != nil {
 			s.logger.Error("logout legacy runtime failed", "instance_id", instance.ID, "reference", reference, "error", runtimeErr)
 		}
-		return instance, nil, runtimeErr
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(runtimeErr, "logout")
 	}
 
 	s.recordRuntimeObservation(ctx, instance, snapshot, "logout", "api", "instance logged out", nil)
@@ -338,10 +329,7 @@ func (s *Service) LogoutByID(ctx context.Context, tenantID, instanceID string) (
 
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
-		if ensureErr != nil {
-			return instance, nil, ensureErr
-		}
-		return instance, nil, fmt.Errorf("runtime unavailable")
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(ensureErr, "logout")
 	}
 
 	snapshot, runtimeErr := runtime.Logout(ctx, instance)
@@ -349,7 +337,7 @@ func (s *Service) LogoutByID(ctx context.Context, tenantID, instanceID string) (
 		if s.logger != nil {
 			s.logger.Error("logout legacy runtime failed", "instance_id", instance.ID, "error", runtimeErr)
 		}
-		return instance, nil, runtimeErr
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(runtimeErr, "logout")
 	}
 
 	s.recordRuntimeObservation(ctx, instance, snapshot, "logout", "api", "instance logged out", nil)
@@ -433,10 +421,7 @@ func (s *Service) Pair(ctx context.Context, tenantID, reference string, input Pa
 
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
-		if ensureErr != nil {
-			return instance, nil, ensureErr
-		}
-		return instance, nil, fmt.Errorf("runtime unavailable")
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(ensureErr, "pair")
 	}
 
 	snapshot, runtimeErr := runtime.Pair(ctx, instance, strings.TrimSpace(input.Phone))
@@ -444,7 +429,7 @@ func (s *Service) Pair(ctx context.Context, tenantID, reference string, input Pa
 		if s.logger != nil {
 			s.logger.Error("pair legacy runtime failed", "instance_id", instance.ID, "reference", reference, "error", runtimeErr)
 		}
-		return instance, nil, runtimeErr
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(runtimeErr, "pair")
 	}
 
 	instance, err = s.applySnapshot(ctx, instance, snapshot)
@@ -463,10 +448,7 @@ func (s *Service) PairByID(ctx context.Context, tenantID, instanceID string, inp
 
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
-		if ensureErr != nil {
-			return instance, nil, ensureErr
-		}
-		return instance, nil, fmt.Errorf("runtime unavailable")
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(ensureErr, "pair")
 	}
 
 	snapshot, runtimeErr := runtime.Pair(ctx, instance, strings.TrimSpace(input.Phone))
@@ -474,7 +456,7 @@ func (s *Service) PairByID(ctx context.Context, tenantID, instanceID string, inp
 		if s.logger != nil {
 			s.logger.Error("pair legacy runtime failed", "instance_id", instance.ID, "error", runtimeErr)
 		}
-		return instance, nil, runtimeErr
+		return instance, nil, normalizeBridgeUnavailableLifecycleError(runtimeErr, "pair")
 	}
 
 	instance, err = s.applySnapshot(ctx, instance, snapshot)
@@ -1571,6 +1553,22 @@ func (s *Service) recordRuntimeObservation(ctx context.Context, instance *reposi
 		Payload:          runtimeObservationPayload(snapshot),
 		OccurredAt:       now,
 	})
+}
+
+func normalizeBridgeUnavailableLifecycleError(err error, action string) error {
+	if err == nil {
+		err = fmt.Errorf("runtime unavailable")
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(message, "runtime unavailable"),
+		strings.Contains(message, "legacy runtime unavailable"),
+		strings.Contains(message, "legacy client runtime unavailable"):
+		return fmt.Errorf("%w: runtime unavailable for %s", domain.ErrConflict, strings.TrimSpace(action))
+	default:
+		return err
+	}
 }
 
 func runtimeObservationPayload(snapshot *RuntimeSnapshot) map[string]any {

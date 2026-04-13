@@ -171,6 +171,7 @@ Runtime admin notes:
 - `logout` is intentionally honest about bridge limits: it requires an active logged-in runtime session and returns an error instead of pretending to clear a session that the bridge cannot prove exists.
 - these action responses reuse the same top-level-plus-`data` compatibility envelope as `status`/`qr`, so the frontend can refresh operational state from the action response without an immediate second request.
 - runtime action envelopes now also include `operator_message`, `bridge_dependent`, and `status_refresh` fields for clearer operator UX.
+- bridge-unavailable lifecycle failures for `reconnect`, `pair`, and `logout` now normalize to `409 conflict` with a `runtime unavailable for <action>` message instead of falling through as a generic `500`.
 - runtime status, runtime history, and history backfill now follow the same compatibility-envelope convention so lifecycle refresh flows can consistently read either top-level fields or `data.*`.
 
 ### Status and QR
@@ -213,6 +214,7 @@ Runtime observability notes:
 - `status_observed` is a persisted "last seen" refresh event; it helps the frontend distinguish stale durable state from a recent live poll.
 - `live` data remains bridge-dependent and may be missing when the legacy runtime is unavailable.
 - `runtime/history` is durable per tenant and instance; it does not require the bridge for reads.
+- when the bridge is unavailable, `/instance/*/runtime` still returns the durable block with `live: null` rather than failing the whole request.
 - runtime and backfill envelopes include explicit operator-facing text so the frontend can distinguish durable reads from live bridge work.
 - runtime status and runtime history responses now duplicate key fields at the top level as well as under `data`, matching the lifecycle action contract.
 
@@ -234,6 +236,7 @@ Backfill notes:
 - Runtime/session history gains durable replay checkpoints (`history_sync_requested`, `history_sync`), but the bridge does not expose a full reconstructable timeline of older disconnect/connect/logout events.
 - Media binaries are not backfilled into SaaS storage; replayed messages are persisted with structured message payloads and metadata only.
 - Successful backfill responses now also duplicate key fields at the top level alongside `data`, matching the other lifecycle/backfill envelopes.
+- if the bridge is unavailable, backfill returns `409 conflict` because the durable store alone cannot initiate a WhatsApp history sync request.
 
 ### Advanced settings
 

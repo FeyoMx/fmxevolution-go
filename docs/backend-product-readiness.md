@@ -129,6 +129,7 @@ Readiness notes:
 - The runtime status endpoint is partially bridge-independent: durable state reads do not require the live bridge, but the optional `live` block still does.
 - Runtime action and observability envelopes now include clearer operator-facing fields so the UI can distinguish durable reads from bridge-dependent work.
 - Lifecycle actions, runtime status, runtime history, and history backfill now all follow the same compatibility response pattern with nested `data` plus duplicated top-level fields for frontend refresh flows.
+- Bridge-unavailable failures are now more consistent for operators: reconnect, pair, logout, and history backfill report `409 conflict` instead of leaking a generic `500` when the SaaS layer cannot reach the live bridge.
 
 ### Messaging
 

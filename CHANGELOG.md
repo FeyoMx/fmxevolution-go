@@ -28,6 +28,7 @@
 - Hardened broadcast failure semantics so partial deliveries fail permanently instead of retrying and risking duplicate sends without recipient-level checkpoints
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
 - Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
+- Normalized bridge-unavailable lifecycle failures so reconnect, pair, and logout now return conflict-style operator errors instead of generic internal errors
 - Added dashboard metrics endpoint with real instance counts and placeholder aggregates for other totals
 
 ### Legacy runtime bridge and compatibility
