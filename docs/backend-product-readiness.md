@@ -128,6 +128,7 @@ Readiness notes:
 - Runtime replay/backfill is limited to sync checkpoints: the backend now persists `history_sync_requested` and `history_sync` when the bridge accepts and ingests a history sync blob.
 - The runtime status endpoint is partially bridge-independent: durable state reads do not require the live bridge, but the optional `live` block still does.
 - Runtime action and observability envelopes now include clearer operator-facing fields so the UI can distinguish durable reads from bridge-dependent work.
+- Lifecycle actions, runtime status, runtime history, and history backfill now all follow the same compatibility response pattern with nested `data` plus duplicated top-level fields for frontend refresh flows.
 
 ### Messaging
 

@@ -75,6 +75,7 @@
 - Added bridge lifecycle publishers from WhatsMeow into the SaaS runtime observability model
 - Added inbound webhook fallback publishing into the chat-history registry to improve inbound persistence reliability when webhook dispatch carries enough message metadata
 - Hardened supported MVP runtime/chat responses with normalized `{ error, message, code }` error DTOs and clearer operator-facing runtime/backfill envelopes
+- Normalized lifecycle/backfill success envelopes so runtime status, runtime history, and history backfill now mirror the same top-level-plus-`data` compatibility shape used by lifecycle actions
 - Hardened history backfill validation so malformed timestamps fail explicitly instead of being silently ignored
 
 ### Configuration and examples

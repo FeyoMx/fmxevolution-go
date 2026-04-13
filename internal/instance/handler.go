@@ -864,10 +864,7 @@ func buildRuntimeStatusEnvelope(instance *repository.Instance, state *repository
 	}
 	payload["operator_message"] = "runtime status reflects durable SaaS state plus optional live bridge state"
 
-	return gin.H{
-		"message": "success",
-		"data":    payload,
-	}
+	return buildLegacyCompatibleEnvelope("success", payload)
 }
 
 func buildRuntimeHistoryEnvelope(instance *repository.Instance, events []repository.RuntimeSessionEvent) gin.H {
@@ -897,10 +894,7 @@ func buildRuntimeHistoryEnvelope(instance *repository.Instance, events []reposit
 	payload["live_bridge_required_for_new_events"] = true
 	payload["operator_message"] = "runtime history is durable for stored events; new live events still depend on the bridge"
 
-	return gin.H{
-		"message": "success",
-		"data":    payload,
-	}
+	return buildLegacyCompatibleEnvelope("success", payload)
 }
 
 func buildHistoryBackfillEnvelope(instance *repository.Instance, result *HistoryBackfillResult, anchorSource string) gin.H {
@@ -918,10 +912,7 @@ func buildHistoryBackfillEnvelope(instance *repository.Instance, result *History
 		payload["count"] = result.Count
 	}
 
-	return gin.H{
-		"message": "history backfill requested",
-		"data":    payload,
-	}
+	return buildLegacyCompatibleEnvelope("history backfill requested", payload)
 }
 
 func buildQRCodePayload(instance *repository.Instance, snapshot *RuntimeSnapshot) gin.H {
@@ -988,6 +979,10 @@ func enrichPayloadWithSnapshot(payload gin.H, snapshot *RuntimeSnapshot) {
 }
 
 func writeLegacyCompatibleEnvelope(c *gin.Context, statusCode int, message string, payload gin.H) {
+	sharedhandler.WriteJSON(c, statusCode, buildLegacyCompatibleEnvelope(message, payload))
+}
+
+func buildLegacyCompatibleEnvelope(message string, payload gin.H) gin.H {
 	response := gin.H{
 		"message": message,
 		"data":    payload,
@@ -995,7 +990,7 @@ func writeLegacyCompatibleEnvelope(c *gin.Context, statusCode int, message strin
 	for key, value := range payload {
 		response[key] = value
 	}
-	sharedhandler.WriteJSON(c, statusCode, response)
+	return response
 }
 
 func runtimeHistoryLimit(c *gin.Context) int {
