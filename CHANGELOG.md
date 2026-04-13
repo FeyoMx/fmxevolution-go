@@ -23,6 +23,9 @@
 
 - Added CRM contacts, tags, and notes modules
 - Added broadcast queueing, worker claiming, retry scheduling, and rate pacing
+- Replaced the broadcast noop processor with real WhatsApp text delivery using the existing tenant-safe instance send path
+- Scoped broadcast recipient resolution to tenant CRM contacts, with support for instance-specific or tenant-wide contacts and de-duplication by phone
+- Hardened broadcast failure semantics so partial deliveries fail permanently instead of retrying and risking duplicate sends without recipient-level checkpoints
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
 - Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
 - Added dashboard metrics endpoint with real instance counts and placeholder aggregates for other totals
@@ -82,7 +85,6 @@
 
 ### Known partial areas
 
-- Broadcast delivery is still a processor stub and is not yet wired to WhatsApp sending
 - Chat list remains live-bridge-backed and can still inherit upstream rate limits
 - Redis rate limiting is not implemented yet
 - Swagger artifacts under `docs/` still represent older/legacy API surfaces and remain out of sync with `cmd/api`
@@ -92,6 +94,7 @@
 - Message-history parity is now usable, but inbound completeness is still partial because there is no backfill from older sessions or full upstream replay into the SaaS read model
 - Durable runtime status/history reads no longer require the live bridge, but live snapshots and connection actions still do
 - Replay/backfill improves inbound message completeness, but it still cannot reconstruct a full older connection/logout timeline from the bridge alone
+- Broadcast jobs now make real send attempts, but there is still no recipient-level progress persistence or delivery analytics on the job record
 
 ### MVP hardening
 

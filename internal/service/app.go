@@ -69,6 +69,8 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 	app.Broadcast = broadcast.NewService(
 		stores.Broadcasts,
 		stores.Instances,
+		stores.CRM,
+		app.Instances,
 		logger.With("module", "broadcast"),
 		cfg.Broadcast.Workers,
 		cfg.Broadcast.QueueBatchSize,

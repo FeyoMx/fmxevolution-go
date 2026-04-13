@@ -209,7 +209,11 @@ Readiness notes:
 
 - Queueing, tenant scoping, and worker claiming are implemented.
 - Broadcast create now rejects negative delay/rate/retry values, and broadcast list clamps `limit` to a bounded range.
-- Delivery execution is still partial because WhatsApp send-out is still a stub.
+- Broadcast jobs now perform real WhatsApp text send attempts through the tenant-safe instance send path.
+- The current recipient source is the tenant CRM contact list, limited to contacts with no `instance_id` or a matching `instance_id`.
+- Jobs fail honestly when there are no eligible contacts or when the target runtime cannot send.
+- Partial delivery is handled conservatively: once one or more recipients were already sent, any later failure marks the job failed instead of retrying and risking duplicate sends.
+- Per-recipient analytics and recipient-level resume checkpoints are still not implemented.
 
 ### Webhooks
 

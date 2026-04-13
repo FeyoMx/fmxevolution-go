@@ -98,6 +98,9 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
   - `status_refresh`
 - clamped broadcast list limits and rejected negative broadcast pacing/retry values
 - added a broadcast queue log entry with tenant/instance context for operator troubleshooting
+- replaced the broadcast noop processor with real WhatsApp text delivery through the tenant-safe instance send path
+- broadcast recipient resolution now comes from tenant CRM contacts scoped to the chosen instance or left unscoped for the tenant
+- broadcast jobs now fail permanently after partial delivery instead of retrying and risking duplicate sends without recipient-level checkpoints
 
 ## Why these changes were made
 
@@ -116,6 +119,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - durable runtime state is only as complete as the events this SaaS process has observed since the feature was introduced
 - history replay improves inbound completeness, but it cannot reconstruct a complete older connect/disconnect/logout timeline from the bridge
 - replayed media payloads do not imply durable SaaS media storage; backfill currently persists metadata and structured message bodies only
+- broadcast still lacks recipient-level progress persistence and aggregate delivery analytics, so partial deliveries currently fail closed rather than resume mid-audience
 - some large multi-package `go test` runs can still hit Windows linker memory limits in this environment, so targeted package verification is more reliable than one giant test invocation
 
 ## Files changed in this wave

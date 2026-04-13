@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EvolutionAPI/evolution-go/internal/instance"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 )
 
@@ -90,6 +91,37 @@ func (instanceRepoMock) GetByGlobalID(_ context.Context, instanceID string) (*re
 	return &repository.Instance{ID: instanceID, TenantID: "tenant-1"}, nil
 }
 
+type contactRepoMock struct {
+	contacts []repository.Contact
+}
+
+func (m contactRepoMock) ListContacts(_ context.Context, tenantID string) ([]repository.Contact, error) {
+	items := make([]repository.Contact, 0, len(m.contacts))
+	for _, contact := range m.contacts {
+		if contact.TenantID == tenantID {
+			items = append(items, contact)
+		}
+	}
+	return items, nil
+}
+
+type senderMock struct {
+	calls []instance.SendTextInput
+	errs  []error
+}
+
+func (m *senderMock) SendText(_ context.Context, tenantID, reference string, input instance.SendTextInput) (*instance.SendTextResult, *repository.Instance, error) {
+	m.calls = append(m.calls, input)
+	if len(m.errs) > 0 {
+		err := m.errs[0]
+		m.errs = m.errs[1:]
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return &instance.SendTextResult{MessageID: "msg-1"}, &repository.Instance{ID: reference, TenantID: tenantID}, nil
+}
+
 type processorMock struct {
 	err error
 }
@@ -100,7 +132,7 @@ func (p processorMock) Process(context.Context, repository.BroadcastJob) error {
 
 func TestCreateBroadcastJobSetsAvailability(t *testing.T) {
 	repo := newBroadcastRepoMock()
-	service := NewService(repo, instanceRepoMock{}, nilLogger(), 1, 1)
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
 
 	now := time.Now().UTC().Add(10 * time.Minute)
 	job, err := service.Create(context.Background(), "tenant-1", CreateInput{
@@ -133,7 +165,7 @@ func TestHandleFailureReschedulesUntilMaxAttempts(t *testing.T) {
 	}
 	repo.jobs[job.ID] = job
 
-	service := NewService(repo, instanceRepoMock{}, nilLogger(), 1, 1)
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
 	service.processor = processorMock{err: errors.New("temporary failure")}
 
 	service.handleJob(context.Background(), "worker-1", *job)
@@ -159,7 +191,7 @@ func TestHandleFailureMarksPermanentFailure(t *testing.T) {
 	}
 	repo.jobs[job.ID] = job
 
-	service := NewService(repo, instanceRepoMock{}, nilLogger(), 1, 1)
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
 	service.processor = processorMock{err: errors.New("permanent failure")}
 
 	service.handleJob(context.Background(), "worker-1", *job)
@@ -170,5 +202,72 @@ func TestHandleFailureMarksPermanentFailure(t *testing.T) {
 	}
 	if updated.FailedAt == nil {
 		t.Fatal("expected failed_at to be set")
+	}
+}
+
+func TestDeliveryProcessorSendsToEligibleContacts(t *testing.T) {
+	contacts := contactRepoMock{contacts: []repository.Contact{
+		{ID: "c1", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
+		{ID: "c2", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
+		{ID: "c3", TenantID: "tenant-1", Phone: "522222222222"},
+		{ID: "c4", TenantID: "tenant-1", Phone: "523333333333", InstanceID: "instance-2"},
+	}}
+	sender := &senderMock{}
+	processor := newDeliveryProcessor(instanceRepoMock{}, contacts, sender, nilLogger())
+
+	err := processor.Process(context.Background(), repository.BroadcastJob{
+		ID:          "job-1",
+		TenantID:    "tenant-1",
+		InstanceID:  "instance-1",
+		Message:     "hello",
+		RatePerHour: 0,
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(sender.calls) != 2 {
+		t.Fatalf("expected 2 send attempts, got %d", len(sender.calls))
+	}
+	if sender.calls[0].Number != "521111111111" || sender.calls[1].Number != "522222222222" {
+		t.Fatalf("unexpected recipients: %+v", sender.calls)
+	}
+}
+
+func TestDeliveryProcessorFailsWithoutEligibleContacts(t *testing.T) {
+	processor := newDeliveryProcessor(instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger())
+
+	err := processor.Process(context.Background(), repository.BroadcastJob{
+		ID:         "job-1",
+		TenantID:   "tenant-1",
+		InstanceID: "instance-1",
+		Message:    "hello",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if isRetryableProcessorError(err) {
+		t.Fatal("expected permanent failure when no eligible contacts exist")
+	}
+}
+
+func TestDeliveryProcessorDoesNotRetryPartialDeliveryFailures(t *testing.T) {
+	contacts := contactRepoMock{contacts: []repository.Contact{
+		{ID: "c1", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
+		{ID: "c2", TenantID: "tenant-1", Phone: "522222222222", InstanceID: "instance-1"},
+	}}
+	sender := &senderMock{errs: []error{nil, errors.New("runtime unavailable")}}
+	processor := newDeliveryProcessor(instanceRepoMock{}, contacts, sender, nilLogger())
+
+	err := processor.Process(context.Background(), repository.BroadcastJob{
+		ID:         "job-1",
+		TenantID:   "tenant-1",
+		InstanceID: "instance-1",
+		Message:    "hello",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if isRetryableProcessorError(err) {
+		t.Fatal("expected partial delivery failure to be permanent")
 	}
 }

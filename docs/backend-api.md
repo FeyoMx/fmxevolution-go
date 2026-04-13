@@ -393,10 +393,22 @@ Rate limiting:
 - `POST /broadcast` is wrapped by the broadcast limiter
 - `GET /broadcast` clamps `limit` to a safe range of `1..200`
 - `POST /broadcast` rejects negative `delay_sec`, `rate_per_hour`, and `max_attempts`
+- `POST /broadcast` rejects `scheduled_at` values that are already in the past
+
+Delivery behavior:
+
+- the worker now performs real WhatsApp text send attempts through the existing tenant-safe instance text-send path
+- recipient resolution is currently derived from tenant CRM contacts whose `instance_id` is either empty or matches the target instance
+- duplicate contact phones are de-duplicated before delivery
+- the job is only marked `completed` after every eligible recipient send returns success
+- if the job cannot reach the runtime or fails before the first successful send, normal retry scheduling still applies
+- if a failure happens after one or more recipients were already sent, the job is marked `failed` with a partial-delivery error instead of retrying and risking duplicate sends
 
 Current limitation:
 
-- the processor is a stub and does not yet send WhatsApp messages itself
+- broadcast execution is text-only and currently targets CRM contacts, not arbitrary imported lists
+- there is still no per-recipient progress, success-total, or failure-total analytics on the `BroadcastJob` record
+- if a job partially delivers and then fails, the backend intentionally stops retrying that job because it does not yet persist recipient-level progress checkpoints
 
 ## Webhooks
 

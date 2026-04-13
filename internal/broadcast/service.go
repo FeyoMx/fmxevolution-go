@@ -2,6 +2,7 @@ package broadcast
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
+	"github.com/EvolutionAPI/evolution-go/internal/instance"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 )
 
@@ -23,22 +25,22 @@ type instanceFinder interface {
 	GetByID(ctx context.Context, tenantID, instanceID string) (*repository.Instance, error)
 }
 
+type contactLister interface {
+	ListContacts(ctx context.Context, tenantID string) ([]repository.Contact, error)
+}
+
+type textSender interface {
+	SendText(ctx context.Context, tenantID, reference string, input instance.SendTextInput) (*instance.SendTextResult, *repository.Instance, error)
+}
+
 type processor interface {
 	Process(ctx context.Context, job repository.BroadcastJob) error
-}
-
-type noopProcessor struct {
-	logger *slog.Logger
-}
-
-func (p noopProcessor) Process(_ context.Context, job repository.BroadcastJob) error {
-	p.logger.Info("broadcast delivery delegated to processor stub", "job_id", job.ID, "instance_id", job.InstanceID, "tenant_id", job.TenantID)
-	return nil
 }
 
 type Service struct {
 	repo           repository.BroadcastRepository
 	instances      instanceFinder
+	contacts       contactLister
 	logger         *slog.Logger
 	processor      processor
 	workers        int
@@ -60,7 +62,7 @@ type CreateInput struct {
 	ScheduledAt *time.Time `json:"scheduled_at"`
 }
 
-func NewService(repo repository.BroadcastRepository, instances instanceFinder, logger *slog.Logger, workers, claimBatchSize int) *Service {
+func NewService(repo repository.BroadcastRepository, instances instanceFinder, contacts contactLister, sender textSender, logger *slog.Logger, workers, claimBatchSize int) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -74,8 +76,9 @@ func NewService(repo repository.BroadcastRepository, instances instanceFinder, l
 	return &Service{
 		repo:           repo,
 		instances:      instances,
+		contacts:       contacts,
 		logger:         logger,
-		processor:      noopProcessor{logger: logger},
+		processor:      newDeliveryProcessor(instances, contacts, sender, logger),
 		workers:        workers,
 		claimBatchSize: claimBatchSize,
 		dispatchEvery:  2 * time.Second,
@@ -109,11 +112,22 @@ func (s *Service) Create(ctx context.Context, tenantID string, input CreateInput
 		return nil, fmt.Errorf("%w: max_attempts cannot be negative", domain.ErrValidation)
 	}
 
-	if _, err := s.instances.GetByID(ctx, tenantID, input.InstanceID); err != nil {
+	instance, err := s.instances.GetByID(ctx, tenantID, input.InstanceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: instance not found for tenant", domain.ErrForbidden)
+	}
+	if instance == nil {
 		return nil, fmt.Errorf("%w: instance not found for tenant", domain.ErrForbidden)
 	}
 
 	now := time.Now().UTC()
+	if input.ScheduledAt != nil {
+		scheduledAt := input.ScheduledAt.UTC()
+		if scheduledAt.Before(now) {
+			return nil, fmt.Errorf("%w: scheduled_at must be in the future", domain.ErrValidation)
+		}
+		input.ScheduledAt = &scheduledAt
+	}
 	availableAt := now
 	if input.DelaySec > 0 {
 		availableAt = availableAt.Add(time.Duration(input.DelaySec) * time.Second)
@@ -223,7 +237,7 @@ func (s *Service) worker(ctx context.Context, workerNumber int) {
 func (s *Service) handleJob(ctx context.Context, workerID string, job repository.BroadcastJob) {
 	s.waitForInstanceSlot(ctx, job.InstanceID, job.RatePerHour)
 
-	processCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	processCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 
 	if err := s.processor.Process(processCtx, job); err != nil {
@@ -243,7 +257,7 @@ func (s *Service) handleJob(ctx context.Context, workerID string, job repository
 func (s *Service) handleFailure(ctx context.Context, workerID string, job repository.BroadcastJob, err error) {
 	now := time.Now().UTC()
 	var retryAt *time.Time
-	if job.Attempts < job.MaxAttempts {
+	if job.Attempts < job.MaxAttempts && isRetryableProcessorError(err) {
 		retry := now.Add(backoffForAttempt(job.Attempts))
 		retryAt = &retry
 	}
@@ -267,6 +281,47 @@ func (s *Service) handleFailure(ctx context.Context, workerID string, job reposi
 	}
 
 	s.logger.Error("broadcast job failed permanently", fields...)
+}
+
+type processorError struct {
+	err       error
+	retryable bool
+}
+
+func (e *processorError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *processorError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func retryableProcessorError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &processorError{err: err, retryable: true}
+}
+
+func permanentProcessorError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &processorError{err: err, retryable: false}
+}
+
+func isRetryableProcessorError(err error) bool {
+	var typed *processorError
+	if errors.As(err, &typed) {
+		return typed.retryable
+	}
+	return true
 }
 
 func (s *Service) waitForInstanceSlot(ctx context.Context, instanceID string, ratePerHour int) {
