@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
@@ -10,81 +9,98 @@ import (
 )
 
 type Handler struct {
-	lister instanceListService
+	service metricsService
 }
 
-type instanceListService interface {
-	List(ctx context.Context, tenantID string) ([]MetricInstance, error)
-}
-
-func NewHandler(lister instanceListService) *Handler {
-	return &Handler{lister: lister}
+func NewHandler(service metricsService) *Handler {
+	return &Handler{service: service}
 }
 
 func (h *Handler) Metrics(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 
-	instances, err := h.lister.List(c.Request.Context(), identity.TenantID)
+	snapshot, err := h.service.Metrics(c.Request.Context(), identity.TenantID)
 	if err != nil {
 		sharedhandler.WriteError(c, err)
 		return
 	}
 
-	active := 0
-	for _, item := range instances {
-		if item.Status == "open" || item.Status == "connected" {
-			active++
-		}
-	}
-
-	totalInstances := len(instances)
-	inactiveInstances := totalInstances - active
+	totalInstances := snapshot.InstancesTotal
+	active := snapshot.InstancesActive
+	inactiveInstances := snapshot.InstancesInactive
 
 	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{
 		// snake_case
-		"instances_total":    totalInstances,
-		"instances_active":   active,
-		"instances_inactive": inactiveInstances,
-		"contacts_total":     0,
-		"messages_total":     0,
-		"broadcast_total":    0,
-		"tenants_total":      1,
-		"users_total":        0,
+		"instances_total":        totalInstances,
+		"instances_active":       active,
+		"instances_inactive":     inactiveInstances,
+		"contacts_total":         snapshot.ContactsTotal,
+		"messages_total":         snapshot.MessagesTotal,
+		"messages_total_partial": snapshot.MessagesTotalPartial,
+		"broadcast_total":        snapshot.BroadcastTotal,
+		"runtime_healthy":        snapshot.RuntimeHealthy,
+		"runtime_degraded":       snapshot.RuntimeDegraded,
+		"runtime_unavailable":    snapshot.RuntimeUnavailable,
+		"runtime_unknown":        snapshot.RuntimeUnknown,
+		"runtime_health_partial": snapshot.RuntimeHealthPartial,
+		"tenants_total":          1,
+		"users_total":            0,
 		// camelCase compatibility
-		"totalInstances":    totalInstances,
-		"activeInstances":   active,
-		"inactiveInstances": inactiveInstances,
-		"totalContacts":     0,
-		"totalMessages":     0,
-		"totalBroadcasts":   0,
-		"totalTenants":      1,
-		"totalUsers":        0,
-		"connectedInstances": active,
+		"totalInstances":        totalInstances,
+		"activeInstances":       active,
+		"inactiveInstances":     inactiveInstances,
+		"totalContacts":         snapshot.ContactsTotal,
+		"totalMessages":         snapshot.MessagesTotal,
+		"totalMessagesPartial":  snapshot.MessagesTotalPartial,
+		"totalBroadcasts":       snapshot.BroadcastTotal,
+		"runtimeHealthy":        snapshot.RuntimeHealthy,
+		"runtimeDegraded":       snapshot.RuntimeDegraded,
+		"runtimeUnavailable":    snapshot.RuntimeUnavailable,
+		"runtimeUnknown":        snapshot.RuntimeUnknown,
+		"runtimeHealthPartial":  snapshot.RuntimeHealthPartial,
+		"totalTenants":          1,
+		"totalUsers":            0,
+		"connectedInstances":    active,
 		"disconnectedInstances": inactiveInstances,
 		// dashboard-style aliases
-		"instances": totalInstances,
-		"contacts":  0,
-		"messages":  0,
-		"broadcasts": 0,
+		"instances":  totalInstances,
+		"contacts":   snapshot.ContactsTotal,
+		"messages":   snapshot.MessagesTotal,
+		"broadcasts": snapshot.BroadcastTotal,
+		"runtime_health": gin.H{
+			"healthy":     snapshot.RuntimeHealthy,
+			"degraded":    snapshot.RuntimeDegraded,
+			"unavailable": snapshot.RuntimeUnavailable,
+			"unknown":     snapshot.RuntimeUnknown,
+			"partial":     snapshot.RuntimeHealthPartial,
+		},
 		"metrics": gin.H{
-			"instances_total":       totalInstances,
-			"instances_active":      active,
-			"instances_inactive":    inactiveInstances,
-			"contacts_total":        0,
-			"messages_total":        0,
-			"broadcast_total":       0,
-			"totalInstances":        totalInstances,
-			"activeInstances":       active,
-			"inactiveInstances":     inactiveInstances,
-			"totalContacts":         0,
-			"totalMessages":         0,
-			"totalBroadcasts":       0,
-			"connectedInstances":    active,
-			"disconnectedInstances": inactiveInstances,
+			"instances_total":        totalInstances,
+			"instances_active":       active,
+			"instances_inactive":     inactiveInstances,
+			"contacts_total":         snapshot.ContactsTotal,
+			"messages_total":         snapshot.MessagesTotal,
+			"messages_total_partial": snapshot.MessagesTotalPartial,
+			"broadcast_total":        snapshot.BroadcastTotal,
+			"runtime_healthy":        snapshot.RuntimeHealthy,
+			"runtime_degraded":       snapshot.RuntimeDegraded,
+			"runtime_unavailable":    snapshot.RuntimeUnavailable,
+			"runtime_unknown":        snapshot.RuntimeUnknown,
+			"runtime_health_partial": snapshot.RuntimeHealthPartial,
+			"totalInstances":         totalInstances,
+			"activeInstances":        active,
+			"inactiveInstances":      inactiveInstances,
+			"totalContacts":          snapshot.ContactsTotal,
+			"totalMessages":          snapshot.MessagesTotal,
+			"totalMessagesPartial":   snapshot.MessagesTotalPartial,
+			"totalBroadcasts":        snapshot.BroadcastTotal,
+			"runtimeHealthy":         snapshot.RuntimeHealthy,
+			"runtimeDegraded":        snapshot.RuntimeDegraded,
+			"runtimeUnavailable":     snapshot.RuntimeUnavailable,
+			"runtimeUnknown":         snapshot.RuntimeUnknown,
+			"runtimeHealthPartial":   snapshot.RuntimeHealthPartial,
+			"connectedInstances":     active,
+			"disconnectedInstances":  inactiveInstances,
 		},
 	})
-}
-
-type MetricInstance struct {
-	Status string
 }

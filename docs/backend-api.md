@@ -84,12 +84,15 @@ Notes:
 
 | Method | Path | Roles | Request body | Success response | Tenant scope |
 |---|---|---|---|---|---|
-| `GET` | `/dashboard/metrics` | owner, admin, agent | none | aggregate JSON with instance counts and placeholder totals | current tenant instances only |
+| `GET` | `/dashboard/metrics` | owner, admin, agent | none | aggregate JSON with real tenant-scoped counts plus explicit partial flags where needed | current tenant only |
 
 Notes:
 
-- `instances_total`, `instances_active`, `instances_inactive` are real
-- several other counters are currently placeholder `0`
+- `instances_total`, `instances_active`, and `instances_inactive` are real tenant-scoped counts
+- `contacts_total` is counted from stored tenant CRM contacts
+- `broadcast_total` is counted from stored tenant broadcast jobs
+- `messages_total` is counted from stored tenant `conversation_messages` rows and is explicitly flagged as partial because it only reflects messages observed, sent, or backfilled into the SaaS read model
+- runtime health is exposed through `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
 
 ## AI
 
@@ -406,9 +409,10 @@ Delivery behavior:
 - the worker now performs real WhatsApp text send attempts through the existing tenant-safe instance text-send path
 - recipient resolution is currently derived from tenant CRM contacts whose `instance_id` is either empty or matches the target instance
 - duplicate contact phones are de-duplicated before delivery
-- the job is only marked `completed` after every eligible recipient send returns success
+- the job is only marked `completed` after every eligible recipient send returns a confirmed send result from the supported instance text-send path
 - if the job cannot reach the runtime or fails before the first successful send, normal retry scheduling still applies
 - if a failure happens after one or more recipients were already sent, the job is marked `failed` with a partial-delivery error instead of retrying and risking duplicate sends
+- if the instance send path returns no delivery evidence for a recipient, the job is not treated as a success
 
 Current limitation:
 

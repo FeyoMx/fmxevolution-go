@@ -101,6 +101,12 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - replaced the broadcast noop processor with real WhatsApp text delivery through the tenant-safe instance send path
 - broadcast recipient resolution now comes from tenant CRM contacts scoped to the chosen instance or left unscoped for the tenant
 - broadcast jobs now fail permanently after partial delivery instead of retrying and risking duplicate sends without recipient-level checkpoints
+- broadcast processing logs now include claim, per-job, and per-recipient attempt/failure details with attempt counters
+- broadcast success now requires a confirmed send result from the instance send path instead of treating an empty result as delivered
+- dashboard metrics now use stored tenant data for `contacts_total`, `broadcast_total`, and `messages_total`
+- dashboard runtime metrics now expose `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
+- `messages_total` is explicitly marked partial because it reflects the tenant-scoped SaaS message-history store, not universal WhatsApp history
+- lifecycle, backfill, and runtime snapshot failure paths now emit more operator-useful logs with tenant/instance context
 
 ## Why these changes were made
 
@@ -113,7 +119,6 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 
 - inbound history is still partial because there is no backfill from older sessions or full upstream history replay
 - Chatwoot, SQS, and manager-style integration suites remain explicit `501 partial`
-- dashboard metrics still include placeholders
 - runtime parity still depends heavily on the legacy bridge for live snapshots, QR retrieval, and connection actions
 - logout truthfulness is limited by the live bridge: if there is no active logged-in runtime session, the backend now returns an explicit error instead of faking success
 - durable runtime state is only as complete as the events this SaaS process has observed since the feature was introduced
@@ -130,7 +135,11 @@ High-signal files updated for this phase include:
 - `internal/ai/service.go`
 - `internal/auth/handler.go`
 - `internal/broadcast/handler.go`
+- `internal/broadcast/processor.go`
 - `internal/broadcast/service.go`
+- `internal/dashboard/handler.go`
+- `internal/dashboard/service.go`
+- `internal/dashboard/service_test.go`
 - `internal/crm/handler.go`
 - `internal/crm/service.go`
 - `internal/handler/http.go`
@@ -189,3 +198,4 @@ High-signal files updated for this phase include:
 - `go build -o api2.exe ./cmd/api` passed
 - `go test ./internal/instance ./internal/broadcast ./pkg/sendstatus` passed
 - the MVP hardening pass is additionally verified with targeted package tests and a fresh `go build -o api.exe ./cmd/api`
+- current sprint validation is still pending a full repo-wide `go test ./...` and `go build ./cmd/api` run in this environment

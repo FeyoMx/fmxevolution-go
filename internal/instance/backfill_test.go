@@ -23,6 +23,10 @@ func (m backfillHistoryRepoMock) List(_ context.Context, _, _ string, filter rep
 	return m.items, nil
 }
 
+func (m backfillHistoryRepoMock) CountByTenant(context.Context, string) (int64, error) {
+	return int64(len(m.items)), nil
+}
+
 func (m backfillHistoryRepoMock) MarkReceipt(context.Context, string, string, string, time.Time) error {
 	return nil
 }

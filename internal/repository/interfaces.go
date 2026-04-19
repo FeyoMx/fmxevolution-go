@@ -40,6 +40,7 @@ type ConversationMessageFilter struct {
 type ConversationMessageRepository interface {
 	Upsert(ctx context.Context, message *ConversationMessage) error
 	List(ctx context.Context, tenantID, instanceID string, filter ConversationMessageFilter) ([]ConversationMessage, error)
+	CountByTenant(ctx context.Context, tenantID string) (int64, error)
 	MarkReceipt(ctx context.Context, instanceID, externalMessageID, state string, at time.Time) error
 }
 
@@ -52,12 +53,14 @@ type RuntimeObservabilityRepository interface {
 	GetState(ctx context.Context, tenantID, instanceID string) (*RuntimeSessionState, error)
 	AppendEvent(ctx context.Context, event *RuntimeSessionEvent) error
 	ListEvents(ctx context.Context, tenantID, instanceID string, filter RuntimeSessionEventFilter) ([]RuntimeSessionEvent, error)
+	ListStatesByTenant(ctx context.Context, tenantID string) ([]RuntimeSessionState, error)
 }
 
 type CRMRepository interface {
 	CreateContact(ctx context.Context, contact *Contact) error
 	GetContact(ctx context.Context, tenantID, contactID string) (*Contact, error)
 	ListContacts(ctx context.Context, tenantID string) ([]Contact, error)
+	CountContactsByTenant(ctx context.Context, tenantID string) (int64, error)
 	UpdateContact(ctx context.Context, contact *Contact) error
 	FindContactByPhone(ctx context.Context, tenantID, phone string) (*Contact, error)
 	CreateTag(ctx context.Context, tag *Tag) error
@@ -70,6 +73,7 @@ type BroadcastRepository interface {
 	Create(ctx context.Context, job *BroadcastJob) error
 	GetByID(ctx context.Context, tenantID, jobID string) (*BroadcastJob, error)
 	ListByTenant(ctx context.Context, tenantID string, limit int) ([]BroadcastJob, error)
+	CountByTenant(ctx context.Context, tenantID string) (int64, error)
 	ClaimNext(ctx context.Context, workerID string, limit int, now time.Time) ([]BroadcastJob, error)
 	MarkCompleted(ctx context.Context, tenantID, jobID string, completedAt time.Time) error
 	MarkFailed(ctx context.Context, tenantID, jobID, message string, failedAt time.Time, retryAt *time.Time) error

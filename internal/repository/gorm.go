@@ -42,6 +42,10 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 	sqlDB.SetMaxIdleConns(maxIdleConns)
 	sqlDB.SetConnMaxLifetime(connMaxLifetime)
 
+	if err := repairConversationMessageSchema(db); err != nil {
+		return nil, fmt.Errorf("repair conversation message schema: %w", err)
+	}
+
 	if err := db.AutoMigrate(
 		&Tenant{},
 		&User{},
@@ -78,6 +82,33 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 		Webhooks:             &gormWebhookRepository{db: db},
 		AI:                   &gormAIRepository{db: db},
 	}, nil
+}
+
+func repairConversationMessageSchema(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+
+	return db.Exec(`
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'conversation_messages'
+		  AND column_name = 'remote_j_id'
+	) AND NOT EXISTS (
+		SELECT 1
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'conversation_messages'
+		  AND column_name = 'remote_jid'
+	) THEN
+		ALTER TABLE conversation_messages RENAME COLUMN remote_j_id TO remote_jid;
+	END IF;
+END $$;
+`).Error
 }
 
 func Close(ctx context.Context, stores *Stores) error {
@@ -290,6 +321,15 @@ func (r *gormConversationMessageRepository) List(ctx context.Context, tenantID, 
 	return messages, nil
 }
 
+func (r *gormConversationMessageRepository) CountByTenant(ctx context.Context, tenantID string) (int64, error) {
+	var total int64
+	err := r.db.WithContext(ctx).
+		Model(&ConversationMessage{}).
+		Where("tenant_id = ?", tenantID).
+		Count(&total).Error
+	return total, err
+}
+
 func (r *gormConversationMessageRepository) MarkReceipt(ctx context.Context, instanceID, externalMessageID, state string, at time.Time) error {
 	instanceID = strings.TrimSpace(instanceID)
 	externalMessageID = strings.TrimSpace(externalMessageID)
@@ -389,6 +429,15 @@ func (r *gormRuntimeObservabilityRepository) ListEvents(ctx context.Context, ten
 	return events, nil
 }
 
+func (r *gormRuntimeObservabilityRepository) ListStatesByTenant(ctx context.Context, tenantID string) ([]RuntimeSessionState, error) {
+	var states []RuntimeSessionState
+	err := r.db.WithContext(ctx).
+		Where("tenant_id = ?", tenantID).
+		Order("updated_at DESC").
+		Find(&states).Error
+	return states, err
+}
+
 func (r *gormCRMRepository) CreateContact(ctx context.Context, contact *Contact) error {
 	return r.db.WithContext(ctx).Create(contact).Error
 }
@@ -413,6 +462,15 @@ func (r *gormCRMRepository) ListContacts(ctx context.Context, tenantID string) (
 		Order("created_at DESC").
 		Find(&contacts, "tenant_id = ?", tenantID).Error
 	return contacts, err
+}
+
+func (r *gormCRMRepository) CountContactsByTenant(ctx context.Context, tenantID string) (int64, error) {
+	var total int64
+	err := r.db.WithContext(ctx).
+		Model(&Contact{}).
+		Where("tenant_id = ?", tenantID).
+		Count(&total).Error
+	return total, err
 }
 
 func (r *gormCRMRepository) UpdateContact(ctx context.Context, contact *Contact) error {
@@ -484,6 +542,15 @@ func (r *gormBroadcastRepository) ListByTenant(ctx context.Context, tenantID str
 	}
 	err := query.Find(&jobs).Error
 	return jobs, err
+}
+
+func (r *gormBroadcastRepository) CountByTenant(ctx context.Context, tenantID string) (int64, error) {
+	var total int64
+	err := r.db.WithContext(ctx).
+		Model(&BroadcastJob{}).
+		Where("tenant_id = ?", tenantID).
+		Count(&total).Error
+	return total, err
 }
 
 func (r *gormBroadcastRepository) ClaimNext(ctx context.Context, workerID string, limit int, now time.Time) ([]BroadcastJob, error) {

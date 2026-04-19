@@ -208,6 +208,9 @@ func (s *Service) claimAndEnqueue(ctx context.Context) {
 		s.logger.Error("claim broadcast jobs", "error", err)
 		return
 	}
+	if len(jobs) > 0 {
+		s.logger.Info("broadcast jobs claimed", "worker_id", workerID, "claimed", len(jobs), "queue_depth", len(s.queue), "queue_capacity", cap(s.queue))
+	}
 
 	for _, job := range jobs {
 		s.tryEnqueue(job)
@@ -235,6 +238,16 @@ func (s *Service) worker(ctx context.Context, workerNumber int) {
 }
 
 func (s *Service) handleJob(ctx context.Context, workerID string, job repository.BroadcastJob) {
+	s.logger.Info(
+		"broadcast job processing",
+		"worker_id", workerID,
+		"job_id", job.ID,
+		"tenant_id", job.TenantID,
+		"instance_id", job.InstanceID,
+		"attempt", job.Attempts,
+		"max_attempts", job.MaxAttempts,
+		"rate_per_hour", job.RatePerHour,
+	)
 	s.waitForInstanceSlot(ctx, job.InstanceID, job.RatePerHour)
 
 	processCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
@@ -272,6 +285,8 @@ func (s *Service) handleFailure(ctx context.Context, workerID string, job reposi
 		"job_id", job.ID,
 		"tenant_id", job.TenantID,
 		"instance_id", job.InstanceID,
+		"attempt", job.Attempts,
+		"max_attempts", job.MaxAttempts,
 		"error", err.Error(),
 	}
 	if retryAt != nil {

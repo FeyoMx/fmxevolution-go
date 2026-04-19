@@ -49,6 +49,16 @@ func (m *broadcastRepoMock) ListByTenant(_ context.Context, tenantID string, _ i
 	return jobs, nil
 }
 
+func (m *broadcastRepoMock) CountByTenant(_ context.Context, tenantID string) (int64, error) {
+	var total int64
+	for _, job := range m.jobs {
+		if job.TenantID == tenantID {
+			total++
+		}
+	}
+	return total, nil
+}
+
 func (m *broadcastRepoMock) ClaimNext(_ context.Context, workerID string, _ int, _ time.Time) ([]repository.BroadcastJob, error) {
 	return append([]repository.BroadcastJob(nil), m.claimed...), nil
 }
@@ -105,13 +115,36 @@ func (m contactRepoMock) ListContacts(_ context.Context, tenantID string) ([]rep
 	return items, nil
 }
 
+func (m contactRepoMock) CountContactsByTenant(_ context.Context, tenantID string) (int64, error) {
+	var total int64
+	for _, contact := range m.contacts {
+		if contact.TenantID == tenantID {
+			total++
+		}
+	}
+	return total, nil
+}
+
 type senderMock struct {
-	calls []instance.SendTextInput
-	errs  []error
+	calls   []instance.SendTextInput
+	errs    []error
+	results []*instance.SendTextResult
 }
 
 func (m *senderMock) SendText(_ context.Context, tenantID, reference string, input instance.SendTextInput) (*instance.SendTextResult, *repository.Instance, error) {
 	m.calls = append(m.calls, input)
+	if len(m.results) > 0 {
+		result := m.results[0]
+		m.results = m.results[1:]
+		if len(m.errs) > 0 {
+			err := m.errs[0]
+			m.errs = m.errs[1:]
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		return result, &repository.Instance{ID: reference, TenantID: tenantID}, nil
+	}
 	if len(m.errs) > 0 {
 		err := m.errs[0]
 		m.errs = m.errs[1:]
@@ -269,5 +302,26 @@ func TestDeliveryProcessorDoesNotRetryPartialDeliveryFailures(t *testing.T) {
 	}
 	if isRetryableProcessorError(err) {
 		t.Fatal("expected partial delivery failure to be permanent")
+	}
+}
+
+func TestDeliveryProcessorDoesNotTreatEmptySendResultAsSuccess(t *testing.T) {
+	contacts := contactRepoMock{contacts: []repository.Contact{
+		{ID: "c1", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
+	}}
+	sender := &senderMock{results: []*instance.SendTextResult{{}}}
+	processor := newDeliveryProcessor(instanceRepoMock{}, contacts, sender, nilLogger())
+
+	err := processor.Process(context.Background(), repository.BroadcastJob{
+		ID:         "job-1",
+		TenantID:   "tenant-1",
+		InstanceID: "instance-1",
+		Message:    "hello",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !isRetryableProcessorError(err) {
+		t.Fatal("expected empty send result without prior deliveries to remain retryable")
 	}
 }

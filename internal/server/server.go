@@ -42,7 +42,7 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 	crmHandler := crm.NewHandler(app.CRM)
 	broadcastHandler := broadcast.NewHandler(app.Broadcast)
 	webhookHandler := webhook.NewHandler(app.Webhooks, app.Instances)
-	dashboardHandler := dashboard.NewHandler(instanceMetricsAdapter{service: app.Instances})
+	dashboardHandler := dashboard.NewHandler(app.Dashboard)
 	tenantMiddleware := middleware.NewTenantMiddleware(app.Tenants)
 
 	router.GET("/healthz", func(c *gin.Context) {
@@ -222,24 +222,4 @@ func (s *Server) Start() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
-}
-
-type instanceMetricsAdapter struct {
-	service *instance.Service
-}
-
-func (a instanceMetricsAdapter) List(ctx context.Context, tenantID string) ([]dashboard.MetricInstance, error) {
-	items, err := a.service.List(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	metrics := make([]dashboard.MetricInstance, 0, len(items))
-	for _, item := range items {
-		metrics = append(metrics, dashboard.MetricInstance{
-			Status: item.Status,
-		})
-	}
-
-	return metrics, nil
 }

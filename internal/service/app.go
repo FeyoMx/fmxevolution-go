@@ -12,6 +12,7 @@ import (
 	"github.com/EvolutionAPI/evolution-go/internal/broadcast"
 	"github.com/EvolutionAPI/evolution-go/internal/config"
 	"github.com/EvolutionAPI/evolution-go/internal/crm"
+	"github.com/EvolutionAPI/evolution-go/internal/dashboard"
 	"github.com/EvolutionAPI/evolution-go/internal/instance"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 	"github.com/EvolutionAPI/evolution-go/internal/tenant"
@@ -28,6 +29,7 @@ type Application struct {
 	Instances *instance.Service
 	CRM       *crm.Service
 	Broadcast *broadcast.Service
+	Dashboard *dashboard.Service
 	Webhooks  *webhook.Service
 	AI        *ai.Service
 }
@@ -56,6 +58,7 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 		Tenants:   tenant.NewService(stores.Tenants, stores.Users),
 		Instances: instance.NewService(stores.Instances, stores.ConversationMessages, stores.RuntimeObservability, instanceRuntime, runtimeFactory, logger.With("module", "instance")),
 		CRM:       crm.NewService(stores.CRM),
+		Dashboard: dashboard.NewService(stores.Instances, stores.CRM, stores.ConversationMessages, stores.Broadcasts, stores.RuntimeObservability),
 		Webhooks:  webhookService,
 		AI:        aiService,
 	}

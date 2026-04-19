@@ -22,7 +22,7 @@ Strong areas:
 Main gaps:
 
 - manager-style integration suites still return explicit `501 partial`
-- dashboard metrics still contain placeholder counters
+- dashboard metrics are materially better, but message totals remain explicitly partial because they only reflect stored SaaS history
 - runtime parity still depends on the legacy bridge in `pkg/*`
 - inbound history persistence is more reliable, and bridge-delivered history-sync blobs are now ingested, but completeness is still bridge-dependent and not universally backfilled from arbitrary older sessions
 
@@ -58,7 +58,9 @@ Implemented route:
 Readiness notes:
 
 - Instance counters are real.
-- Several other counters are placeholders, so this route is implemented but not yet full analytics parity.
+- `contacts_total` and `broadcast_total` are now counted from stored tenant data.
+- `messages_total` is now counted from stored tenant conversation history and explicitly flagged partial.
+- Runtime health counters are now exposed as healthy/degraded/unavailable/unknown buckets with a partial flag when some instances have no durable runtime state yet.
 
 ### AI
 
@@ -214,6 +216,7 @@ Readiness notes:
 - Broadcast jobs now perform real WhatsApp text send attempts through the tenant-safe instance send path.
 - The current recipient source is the tenant CRM contact list, limited to contacts with no `instance_id` or a matching `instance_id`.
 - Jobs fail honestly when there are no eligible contacts or when the target runtime cannot send.
+- Jobs also fail honestly when the instance send path returns no confirmable send result for a recipient.
 - Partial delivery is handled conservatively: once one or more recipients were already sent, any later failure marks the job failed instead of retrying and risking duplicate sends.
 - Per-recipient analytics and recipient-level resume checkpoints are still not implemented.
 
@@ -283,8 +286,9 @@ Functional route:
 
 Current limitations:
 
-- only instance counters are trustworthy
-- contact/message/revenue-style analytics are not implemented
+- instance, contact, and broadcast totals are trustworthy
+- message totals are truthful for the SaaS history store but explicitly partial relative to global WhatsApp history
+- there is still no revenue or campaign analytics layer
 
 ### AI parity
 
@@ -344,8 +348,8 @@ These capabilities are still missing from the active SaaS surface even though th
 - tenant-safe Chatwoot storage and runtime wiring
 - tenant-safe CRUD for OpenAI, Typebot, Dify, N8N, EvoAI, EvolutionBot, and Flowise
 - full upstream chat-history replay/backfill parity
-- full broadcast-to-WhatsApp execution
-- trustworthy product analytics beyond instance counts
+- recipient-level broadcast progress and resume checkpoints
+- full product analytics beyond tenant-scoped operational counts
 
 ## Known Technical Debt
 
@@ -353,7 +357,7 @@ These capabilities are still missing from the active SaaS surface even though th
 - message history now uses a tenant-safe SaaS repository, but inbound capture still depends on active bridge events and receipts
 - chat list still depends on live bridge queries and can surface upstream rate-limit behavior
 - many manager integration suites are represented only as explicit `501` placeholders
-- dashboard metrics still contain placeholders
+- message totals remain explicitly partial because they only count stored SaaS history rows
 - Swagger artifacts remain stale relative to `cmd/api`
 - current media/audio implementation is intentionally scoped to JSON payloads used by the current frontend, not every upstream transport shape
 
@@ -361,6 +365,6 @@ These capabilities are still missing from the active SaaS surface even though th
 
 1. Add operator-safe throttling or caching around live chat-list queries so bridge rate limits do not degrade MVP UX.
 2. Tighten targeted integration tests around auth, runtime actions, message search, and backfill envelopes.
-3. Replace placeholder dashboard metrics with real aggregates or label them partial in UI.
+3. Add recipient-level broadcast checkpoints and delivery analytics so partial jobs can resume safely.
 4. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.
 5. Decide which manager integration suites are true product priorities and keep the rest explicitly unsupported.

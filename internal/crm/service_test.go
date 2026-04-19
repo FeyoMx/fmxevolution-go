@@ -52,6 +52,16 @@ func (m *crmRepoMock) ListContacts(_ context.Context, tenantID string) ([]reposi
 	return contacts, nil
 }
 
+func (m *crmRepoMock) CountContactsByTenant(_ context.Context, tenantID string) (int64, error) {
+	var total int64
+	for _, contact := range m.contactsByID {
+		if contact.TenantID == tenantID {
+			total++
+		}
+	}
+	return total, nil
+}
+
 func (m *crmRepoMock) UpdateContact(_ context.Context, contact *repository.Contact) error {
 	copied := *contact
 	m.contactsByID[contact.ID] = &copied

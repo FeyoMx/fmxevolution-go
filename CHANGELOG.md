@@ -26,10 +26,14 @@
 - Replaced the broadcast noop processor with real WhatsApp text delivery using the existing tenant-safe instance send path
 - Scoped broadcast recipient resolution to tenant CRM contacts, with support for instance-specific or tenant-wide contacts and de-duplication by phone
 - Hardened broadcast failure semantics so partial deliveries fail permanently instead of retrying and risking duplicate sends without recipient-level checkpoints
+- Added richer broadcast execution logs for job claiming, per-job processing, and per-recipient send attempts/failures
+- Hardened broadcast success semantics so a job is not treated as delivered unless the instance send path returns a confirmed send result
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
 - Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
 - Normalized bridge-unavailable lifecycle failures so reconnect, pair, and logout now return conflict-style operator errors instead of generic internal errors
-- Added dashboard metrics endpoint with real instance counts and placeholder aggregates for other totals
+- Added the missing `conversation_messages` table to the SQL baseline migration so tenant-safe message history search no longer depends on runtime auto-migrate to exist
+- Added dashboard metrics endpoint with real tenant-scoped instance, contact, and broadcast counts plus runtime health buckets
+- Counted `messages_total` from stored tenant conversation history and marked it explicitly partial because it reflects SaaS-observed history, not universal WhatsApp history
 
 ### Legacy runtime bridge and compatibility
 
@@ -106,6 +110,7 @@
 - Hardened tenant AI settings to the currently supported `openai`-compatible provider surface
 - Hardened broadcast validation by rejecting negative pacing/retry values and clamping list limits
 - Added broadcast queue logging with tenant and instance context for operator troubleshooting
+- Added clearer lifecycle, backfill, and runtime snapshot failure logs with tenant and instance context
 
 ### Release candidate docs
 

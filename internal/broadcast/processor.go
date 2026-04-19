@@ -66,11 +66,39 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 			}
 		}
 
-		_, _, sendErr := p.sender.SendText(ctx, job.TenantID, instanceRecord.ID, instance.SendTextInput{
+		if p.logger != nil {
+			p.logger.Info(
+				"broadcast recipient send attempt",
+				"job_id", job.ID,
+				"tenant_id", job.TenantID,
+				"instance_id", job.InstanceID,
+				"recipient", recipient.Phone,
+				"recipient_index", idx+1,
+				"recipient_total", len(recipients),
+				"attempt", job.Attempts,
+				"max_attempts", job.MaxAttempts,
+			)
+		}
+
+		result, _, sendErr := p.sender.SendText(ctx, job.TenantID, instanceRecord.ID, instance.SendTextInput{
 			Number: recipient.Phone,
 			Text:   job.Message,
 		})
 		if sendErr != nil {
+			if p.logger != nil {
+				p.logger.Warn(
+					"broadcast recipient send failed",
+					"job_id", job.ID,
+					"tenant_id", job.TenantID,
+					"instance_id", job.InstanceID,
+					"recipient", recipient.Phone,
+					"recipient_index", idx+1,
+					"recipient_total", len(recipients),
+					"attempt", job.Attempts,
+					"max_attempts", job.MaxAttempts,
+					"error", sendErr.Error(),
+				)
+			}
 			if sentCount > 0 {
 				return permanentProcessorError(fmt.Errorf("broadcast partially delivered to %d/%d contacts before failing on %s: %w", sentCount, len(recipients), recipient.Phone, sendErr))
 			}
@@ -78,6 +106,26 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 				return permanentProcessorError(fmt.Errorf("broadcast delivery failed before first send attempt completed: %w", sendErr))
 			}
 			return retryableProcessorError(fmt.Errorf("broadcast delivery failed before first send attempt completed: %w", sendErr))
+		}
+		if !isConfirmedSendAttempt(result) {
+			reason := fmt.Errorf("instance send path returned no delivery evidence for recipient %s", recipient.Phone)
+			if p.logger != nil {
+				p.logger.Warn(
+					"broadcast recipient send returned no delivery evidence",
+					"job_id", job.ID,
+					"tenant_id", job.TenantID,
+					"instance_id", job.InstanceID,
+					"recipient", recipient.Phone,
+					"recipient_index", idx+1,
+					"recipient_total", len(recipients),
+					"attempt", job.Attempts,
+					"max_attempts", job.MaxAttempts,
+				)
+			}
+			if sentCount > 0 {
+				return permanentProcessorError(fmt.Errorf("broadcast partially delivered to %d/%d contacts before encountering an unconfirmed send result on %s: %w", sentCount, len(recipients), recipient.Phone, reason))
+			}
+			return retryableProcessorError(fmt.Errorf("broadcast delivery failed before first send attempt completed: %w", reason))
 		}
 
 		sentCount++
@@ -105,6 +153,16 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 	}
 
 	return nil
+}
+
+func isConfirmedSendAttempt(result *instance.SendTextResult) bool {
+	if result == nil {
+		return false
+	}
+	return strings.TrimSpace(result.MessageID) != "" ||
+		result.ServerID != 0 ||
+		!result.Timestamp.IsZero() ||
+		strings.TrimSpace(result.Chat) != ""
 }
 
 type broadcastRecipient struct {
