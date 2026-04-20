@@ -22,7 +22,7 @@ Strong areas:
 Main gaps:
 
 - manager-style integration suites still return explicit `501 partial`
-- dashboard metrics are materially better, but message totals remain explicitly partial because they only reflect stored SaaS history
+- dashboard metrics are materially better, but message totals and some recipient aggregates remain explicitly partial when historical broadcasts predate recipient progress tracking
 - runtime parity still depends on the legacy bridge in `pkg/*`
 - inbound history persistence is more reliable, and bridge-delivered history-sync blobs are now ingested, but completeness is still bridge-dependent and not universally backfilled from arbitrary older sessions
 
@@ -60,6 +60,7 @@ Readiness notes:
 - Instance counters are real.
 - `contacts_total` and `broadcast_total` are now counted from stored tenant data.
 - `messages_total` is now counted from stored tenant conversation history and explicitly flagged partial.
+- Broadcast recipient totals, attempted, sent, failed, and pending are now counted from durable recipient progress rows and explicitly flagged partial when some historical jobs have no recipient snapshot yet.
 - Runtime health counters are now exposed as healthy/degraded/unavailable/unknown buckets with a partial flag when some instances have no durable runtime state yet.
 
 ### AI
@@ -214,11 +215,12 @@ Readiness notes:
 - Queueing, tenant scoping, and worker claiming are implemented.
 - Broadcast create now rejects negative delay/rate/retry values, and broadcast list clamps `limit` to a bounded range.
 - Broadcast jobs now perform real WhatsApp text send attempts through the tenant-safe instance send path.
-- The current recipient source is the tenant CRM contact list, limited to contacts with no `instance_id` or a matching `instance_id`.
+- The current recipient source is the tenant CRM contact list, limited to contacts with no `instance_id` or a matching `instance_id`, and the recipient set is snapshotted into durable progress rows.
 - Jobs fail honestly when there are no eligible contacts or when the target runtime cannot send.
 - Jobs also fail honestly when the instance send path returns no confirmable send result for a recipient.
-- Partial delivery is handled conservatively: once one or more recipients were already sent, any later failure marks the job failed instead of retrying and risking duplicate sends.
-- Per-recipient analytics and recipient-level resume checkpoints are still not implemented.
+- Retryable failures now resume safely from pending recipients without duplicating recipients already marked `sent`.
+- Permanent recipient failures are tracked per recipient and surfaced in job analytics.
+- Broadcast jobs can now finish as `completed_with_failures` when the audience is fully processed but some recipients are terminal failures.
 
 ### Webhooks
 
@@ -287,6 +289,7 @@ Functional route:
 Current limitations:
 
 - instance, contact, and broadcast totals are trustworthy
+- recipient-level broadcast analytics are trustworthy for broadcasts with seeded recipient progress
 - message totals are truthful for the SaaS history store but explicitly partial relative to global WhatsApp history
 - there is still no revenue or campaign analytics layer
 
@@ -348,7 +351,7 @@ These capabilities are still missing from the active SaaS surface even though th
 - tenant-safe Chatwoot storage and runtime wiring
 - tenant-safe CRUD for OpenAI, Typebot, Dify, N8N, EvoAI, EvolutionBot, and Flowise
 - full upstream chat-history replay/backfill parity
-- recipient-level broadcast progress and resume checkpoints
+- old historical broadcasts created before recipient progress tracking may still show partial recipient analytics
 - full product analytics beyond tenant-scoped operational counts
 
 ## Known Technical Debt
@@ -358,6 +361,7 @@ These capabilities are still missing from the active SaaS surface even though th
 - chat list still depends on live bridge queries and can surface upstream rate-limit behavior
 - many manager integration suites are represented only as explicit `501` placeholders
 - message totals remain explicitly partial because they only count stored SaaS history rows
+- recipient aggregates also remain partially historical until older broadcasts are re-run or backfilled into recipient progress rows
 - Swagger artifacts remain stale relative to `cmd/api`
 - current media/audio implementation is intentionally scoped to JSON payloads used by the current frontend, not every upstream transport shape
 
@@ -365,6 +369,6 @@ These capabilities are still missing from the active SaaS surface even though th
 
 1. Add operator-safe throttling or caching around live chat-list queries so bridge rate limits do not degrade MVP UX.
 2. Tighten targeted integration tests around auth, runtime actions, message search, and backfill envelopes.
-3. Add recipient-level broadcast checkpoints and delivery analytics so partial jobs can resume safely.
+3. Add operator-facing broadcast filters and pagination over recipient progress so large campaigns remain easy to inspect.
 4. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.
 5. Decide which manager integration suites are true product priorities and keep the rest explicitly unsupported.

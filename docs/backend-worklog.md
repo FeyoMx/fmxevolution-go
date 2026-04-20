@@ -100,13 +100,19 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - added a broadcast queue log entry with tenant/instance context for operator troubleshooting
 - replaced the broadcast noop processor with real WhatsApp text delivery through the tenant-safe instance send path
 - broadcast recipient resolution now comes from tenant CRM contacts scoped to the chosen instance or left unscoped for the tenant
-- broadcast jobs now fail permanently after partial delivery instead of retrying and risking duplicate sends without recipient-level checkpoints
+- broadcast recipient progress is now durably persisted per job and per phone with status, attempt counts, last error, timestamps, and send references
+- broadcast jobs now seed a recipient snapshot from tenant CRM contacts so the audience is stable across retries
+- retryable broadcast failures now pause and resume from pending recipients instead of replaying recipients already marked sent
+- permanent recipient failures are tracked per recipient and no longer force the whole job to stop if the rest of the audience can still be processed
+- broadcast jobs can now finish as `completed_with_failures` when all recipients are terminal but some failed permanently
 - broadcast processing logs now include claim, per-job, and per-recipient attempt/failure details with attempt counters
 - broadcast success now requires a confirmed send result from the instance send path instead of treating an empty result as delivered
 - dashboard metrics now use stored tenant data for `contacts_total`, `broadcast_total`, and `messages_total`
+- dashboard metrics now also expose broadcast recipient totals, attempted, sent, failed, pending, and a partial flag for older untracked jobs
 - dashboard runtime metrics now expose `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
 - `messages_total` is explicitly marked partial because it reflects the tenant-scoped SaaS message-history store, not universal WhatsApp history
 - lifecycle, backfill, and runtime snapshot failure paths now emit more operator-useful logs with tenant/instance context
+- repo-root temp utilities now use `//go:build ignore`, which removes them as blockers for `go test ./...`
 
 ## Why these changes were made
 
@@ -124,8 +130,8 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - durable runtime state is only as complete as the events this SaaS process has observed since the feature was introduced
 - history replay improves inbound completeness, but it cannot reconstruct a complete older connect/disconnect/logout timeline from the bridge
 - replayed media payloads do not imply durable SaaS media storage; backfill currently persists metadata and structured message bodies only
-- broadcast still lacks recipient-level progress persistence and aggregate delivery analytics, so partial deliveries currently fail closed rather than resume mid-audience
 - some large multi-package `go test` runs can still hit Windows linker memory limits in this environment, so targeted package verification is more reliable than one giant test invocation
+- repo-wide `go test ./...` is still blocked by legacy `github.com/chai2010/webp` build failures outside the SaaS sprint slice
 
 ## Files changed in this wave
 
@@ -137,6 +143,7 @@ High-signal files updated for this phase include:
 - `internal/broadcast/handler.go`
 - `internal/broadcast/processor.go`
 - `internal/broadcast/service.go`
+- `internal/broadcast/service_test.go`
 - `internal/dashboard/handler.go`
 - `internal/dashboard/service.go`
 - `internal/dashboard/service_test.go`
@@ -160,6 +167,8 @@ High-signal files updated for this phase include:
 - `internal/webhook/service.go`
 - `internal/webhook/service_test.go`
 - `migrations/000001_saas_core.sql`
+- `tmp_fix_remote_jid.go`
+- `tmp_schema_check.go`
 - `pkg/runtimeobs/registry.go`
 - `pkg/whatsmeow/service/whatsmeow.go`
 - `docs/backend-api.md`
@@ -195,7 +204,6 @@ High-signal files updated for this phase include:
 ## Verification notes
 
 - code was reformatted with `gofmt`
-- `go build -o api2.exe ./cmd/api` passed
-- `go test ./internal/instance ./internal/broadcast ./pkg/sendstatus` passed
-- the MVP hardening pass is additionally verified with targeted package tests and a fresh `go build -o api.exe ./cmd/api`
-- current sprint validation is still pending a full repo-wide `go test ./...` and `go build ./cmd/api` run in this environment
+- `go test ./internal/broadcast ./internal/dashboard ./internal/server ./internal/crm ./internal/instance` passed
+- `go build -mod=readonly ./cmd/api` passed
+- `go test ./...` was attempted and now clears the repo-root temp-file blocker, but it still fails in legacy packages because `github.com/chai2010/webp` does not build in this environment

@@ -74,8 +74,14 @@ type BroadcastRepository interface {
 	GetByID(ctx context.Context, tenantID, jobID string) (*BroadcastJob, error)
 	ListByTenant(ctx context.Context, tenantID string, limit int) ([]BroadcastJob, error)
 	CountByTenant(ctx context.Context, tenantID string) (int64, error)
+	SeedRecipientProgress(ctx context.Context, records []BroadcastRecipientProgress) error
+	SaveRecipientProgress(ctx context.Context, progress *BroadcastRecipientProgress) error
+	ListRecipientProgress(ctx context.Context, tenantID, jobID string) ([]BroadcastRecipientProgress, error)
+	SummarizeRecipientProgress(ctx context.Context, tenantID, jobID string) (BroadcastRecipientAnalytics, error)
+	SummarizeRecipientProgressByTenant(ctx context.Context, tenantID string) (BroadcastRecipientAnalytics, error)
 	ClaimNext(ctx context.Context, workerID string, limit int, now time.Time) ([]BroadcastJob, error)
 	MarkCompleted(ctx context.Context, tenantID, jobID string, completedAt time.Time) error
+	MarkCompletedWithFailures(ctx context.Context, tenantID, jobID, message string, completedAt time.Time) error
 	MarkFailed(ctx context.Context, tenantID, jobID, message string, failedAt time.Time, retryAt *time.Time) error
 }
 

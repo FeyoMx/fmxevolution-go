@@ -35,6 +35,33 @@ CREATE TABLE IF NOT EXISTS instances (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id uuid PRIMARY KEY,
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    instance_id uuid NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    remote_jid varchar(255) NOT NULL,
+    external_message_id varchar(255) NOT NULL,
+    direction varchar(20) NOT NULL,
+    message_type varchar(100) NOT NULL,
+    push_name varchar(255),
+    source varchar(255),
+    body text,
+    status varchar(50) NOT NULL,
+    message_timestamp timestamptz NOT NULL,
+    media_url varchar(1000),
+    mime_type varchar(255),
+    file_name varchar(255),
+    caption text,
+    message_payload text,
+    delivered_at timestamptz NULL,
+    read_at timestamptz NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_lookup ON conversation_messages (tenant_id, instance_id, remote_jid, message_timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_instance_external ON conversation_messages (instance_id, external_message_id);
+
 CREATE TABLE IF NOT EXISTS runtime_session_states (
     id uuid PRIMARY KEY,
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -143,6 +170,29 @@ CREATE TABLE IF NOT EXISTS broadcast_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_broadcast_jobs_ready ON broadcast_jobs (status, available_at, created_at);
+
+CREATE TABLE IF NOT EXISTS broadcast_recipient_progress (
+    id uuid PRIMARY KEY,
+    broadcast_id uuid NOT NULL REFERENCES broadcast_jobs(id) ON DELETE CASCADE,
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    instance_id uuid NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    contact_id uuid NULL REFERENCES contacts(id) ON DELETE SET NULL,
+    phone varchar(50) NOT NULL,
+    delivery_status varchar(50) NOT NULL DEFAULT 'pending',
+    attempt_count integer NOT NULL DEFAULT 0,
+    last_error text NULL,
+    last_attempt_at timestamptz NULL,
+    sent_at timestamptz NULL,
+    failed_at timestamptz NULL,
+    message_id varchar(255) NULL,
+    server_id bigint NOT NULL DEFAULT 0,
+    chat_jid varchar(255) NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_broadcast_recipient_progress_lookup ON broadcast_recipient_progress (tenant_id, broadcast_id, instance_id, phone);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_broadcast_recipient_progress_phone ON broadcast_recipient_progress (broadcast_id, phone);
 
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
     id uuid PRIMARY KEY,

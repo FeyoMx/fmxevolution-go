@@ -25,6 +25,7 @@ type messageCounter interface {
 
 type broadcastCounter interface {
 	CountByTenant(ctx context.Context, tenantID string) (int64, error)
+	SummarizeRecipientProgressByTenant(ctx context.Context, tenantID string) (repository.BroadcastRecipientAnalytics, error)
 }
 
 type runtimeStateLister interface {
@@ -47,6 +48,7 @@ type MetricsSnapshot struct {
 	MessagesTotal        int64
 	MessagesTotalPartial bool
 	BroadcastTotal       int64
+	BroadcastRecipients  repository.BroadcastRecipientAnalytics
 	RuntimeHealthy       int
 	RuntimeDegraded      int
 	RuntimeUnavailable   int
@@ -72,11 +74,6 @@ func (s *Service) Metrics(ctx context.Context, tenantID string) (MetricsSnapshot
 		return snapshot, err
 	}
 	snapshot.InstancesTotal = len(instances)
-
-	instanceByID := make(map[string]repository.Instance, len(instances))
-	for _, item := range instances {
-		instanceByID[item.ID] = item
-	}
 
 	active := 0
 	for _, item := range instances {
@@ -110,6 +107,13 @@ func (s *Service) Metrics(ctx context.Context, tenantID string) (MetricsSnapshot
 			return snapshot, err
 		}
 		snapshot.BroadcastTotal = total
+
+		recipientSummary, err := s.broadcasts.SummarizeRecipientProgressByTenant(ctx, tenantID)
+		if err != nil {
+			return snapshot, err
+		}
+		recipientSummary.Partial = total > 0 && recipientSummary.TrackedBroadcasts < total
+		snapshot.BroadcastRecipients = recipientSummary
 	}
 
 	if s.runtime != nil {

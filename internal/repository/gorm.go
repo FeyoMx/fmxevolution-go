@@ -61,6 +61,7 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 		&DealStage{},
 		&Deal{},
 		&BroadcastJob{},
+		&BroadcastRecipientProgress{},
 		&WebhookEndpoint{},
 		&WebhookDelivery{},
 		&AISettings{},
@@ -553,6 +554,85 @@ func (r *gormBroadcastRepository) CountByTenant(ctx context.Context, tenantID st
 	return total, err
 }
 
+func (r *gormBroadcastRepository) SeedRecipientProgress(ctx context.Context, records []BroadcastRecipientProgress) error {
+	if len(records) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "broadcast_id"}, {Name: "phone"}},
+		DoNothing: true,
+	}).Create(&records).Error
+}
+
+func (r *gormBroadcastRepository) SaveRecipientProgress(ctx context.Context, progress *BroadcastRecipientProgress) error {
+	if progress == nil {
+		return nil
+	}
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "broadcast_id"},
+			{Name: "phone"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"tenant_id",
+			"instance_id",
+			"contact_id",
+			"delivery_status",
+			"attempt_count",
+			"last_error",
+			"last_attempt_at",
+			"sent_at",
+			"failed_at",
+			"message_id",
+			"server_id",
+			"chat_jid",
+			"updated_at",
+		}),
+	}).Create(progress).Error
+}
+
+func (r *gormBroadcastRepository) ListRecipientProgress(ctx context.Context, tenantID, jobID string) ([]BroadcastRecipientProgress, error) {
+	var progress []BroadcastRecipientProgress
+	err := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND broadcast_id = ?", tenantID, jobID).
+		Order("created_at ASC, phone ASC").
+		Find(&progress).Error
+	return progress, err
+}
+
+func (r *gormBroadcastRepository) SummarizeRecipientProgress(ctx context.Context, tenantID, jobID string) (BroadcastRecipientAnalytics, error) {
+	var summary BroadcastRecipientAnalytics
+	err := r.db.WithContext(ctx).
+		Model(&BroadcastRecipientProgress{}).
+		Select(`
+			COUNT(*) AS total_recipients,
+			COALESCE(SUM(CASE WHEN attempt_count > 0 THEN 1 ELSE 0 END), 0) AS attempted,
+			COALESCE(SUM(CASE WHEN delivery_status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+			COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+			COALESCE(SUM(CASE WHEN delivery_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending
+		`).
+		Where("tenant_id = ? AND broadcast_id = ?", tenantID, jobID).
+		Scan(&summary).Error
+	return summary, err
+}
+
+func (r *gormBroadcastRepository) SummarizeRecipientProgressByTenant(ctx context.Context, tenantID string) (BroadcastRecipientAnalytics, error) {
+	var summary BroadcastRecipientAnalytics
+	err := r.db.WithContext(ctx).
+		Model(&BroadcastRecipientProgress{}).
+		Select(`
+			COUNT(DISTINCT broadcast_id) AS tracked_broadcasts,
+			COUNT(*) AS total_recipients,
+			COALESCE(SUM(CASE WHEN attempt_count > 0 THEN 1 ELSE 0 END), 0) AS attempted,
+			COALESCE(SUM(CASE WHEN delivery_status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+			COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+			COALESCE(SUM(CASE WHEN delivery_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending
+		`).
+		Where("tenant_id = ?", tenantID).
+		Scan(&summary).Error
+	return summary, err
+}
+
 func (r *gormBroadcastRepository) ClaimNext(ctx context.Context, workerID string, limit int, now time.Time) ([]BroadcastJob, error) {
 	jobs := make([]BroadcastJob, 0, limit)
 
@@ -608,6 +688,25 @@ func (r *gormBroadcastRepository) MarkCompleted(ctx context.Context, tenantID, j
 			"status":       "completed",
 			"completed_at": completedAt,
 			"last_error":   "",
+			"worker_id":    "",
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (r *gormBroadcastRepository) MarkCompletedWithFailures(ctx context.Context, tenantID, jobID, message string, completedAt time.Time) error {
+	result := r.db.WithContext(ctx).
+		Model(&BroadcastJob{}).
+		Where("tenant_id = ? AND id = ?", tenantID, jobID).
+		Updates(map[string]any{
+			"status":       "completed_with_failures",
+			"completed_at": completedAt,
+			"last_error":   strings.TrimSpace(message),
 			"worker_id":    "",
 		})
 	if result.Error != nil {

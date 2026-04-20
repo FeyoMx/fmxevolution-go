@@ -63,7 +63,7 @@ type ConversationMessage struct {
 	ID                string     `json:"id" gorm:"type:uuid;primaryKey"`
 	TenantID          string     `json:"tenant_id" gorm:"type:uuid;index:idx_conversation_messages_lookup,priority:1;not null"`
 	InstanceID        string     `json:"instance_id" gorm:"type:uuid;index:idx_conversation_messages_lookup,priority:2;not null;uniqueIndex:idx_conversation_messages_instance_external,priority:1"`
-	RemoteJID         string     `json:"remote_jid" gorm:"size:255;index:idx_conversation_messages_lookup,priority:3;not null"`
+	RemoteJID         string     `json:"remote_jid" gorm:"column:remote_jid;size:255;index:idx_conversation_messages_lookup,priority:3;not null"`
 	ExternalMessageID string     `json:"external_message_id" gorm:"size:255;index:idx_conversation_messages_lookup,priority:4;not null;uniqueIndex:idx_conversation_messages_instance_external,priority:2"`
 	Direction         string     `json:"direction" gorm:"size:20;not null"`
 	MessageType       string     `json:"message_type" gorm:"size:100;not null"`
@@ -206,6 +206,45 @@ type BroadcastJob struct {
 	FailedAt    *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+
+	RecipientTotal     int64                        `json:"recipient_total,omitempty" gorm:"-"`
+	RecipientAttempted int64                        `json:"recipient_attempted,omitempty" gorm:"-"`
+	RecipientSent      int64                        `json:"recipient_sent,omitempty" gorm:"-"`
+	RecipientFailed    int64                        `json:"recipient_failed,omitempty" gorm:"-"`
+	RecipientPending   int64                        `json:"recipient_pending,omitempty" gorm:"-"`
+	RecipientPartial   bool                         `json:"recipient_partial,omitempty" gorm:"-"`
+	RecipientAnalytics BroadcastRecipientAnalytics  `json:"recipient_analytics,omitempty" gorm:"-"`
+	Recipients         []BroadcastRecipientProgress `json:"recipients,omitempty" gorm:"-"`
+}
+
+type BroadcastRecipientProgress struct {
+	ID             string     `json:"id" gorm:"type:uuid;primaryKey"`
+	BroadcastID    string     `json:"broadcast_id" gorm:"type:uuid;not null;index:idx_broadcast_recipient_lookup,priority:2;uniqueIndex:idx_broadcast_recipient_phone,priority:1"`
+	TenantID       string     `json:"tenant_id" gorm:"type:uuid;not null;index:idx_broadcast_recipient_lookup,priority:1"`
+	InstanceID     string     `json:"instance_id" gorm:"type:uuid;not null;index:idx_broadcast_recipient_lookup,priority:3"`
+	ContactID      *string    `json:"contact_id,omitempty" gorm:"type:uuid;index"`
+	Phone          string     `json:"phone" gorm:"size:50;not null;index:idx_broadcast_recipient_lookup,priority:4;uniqueIndex:idx_broadcast_recipient_phone,priority:2"`
+	DeliveryStatus string     `json:"delivery_status" gorm:"size:50;not null;default:'pending';index"`
+	AttemptCount   int        `json:"attempt_count" gorm:"not null;default:0"`
+	LastError      string     `json:"last_error,omitempty" gorm:"type:text"`
+	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
+	SentAt         *time.Time `json:"sent_at,omitempty"`
+	FailedAt       *time.Time `json:"failed_at,omitempty"`
+	MessageID      string     `json:"message_id,omitempty" gorm:"size:255"`
+	ServerID       int64      `json:"server_id,omitempty"`
+	ChatJID        string     `json:"chat_jid,omitempty" gorm:"size:255"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type BroadcastRecipientAnalytics struct {
+	TrackedBroadcasts int64 `json:"tracked_broadcasts,omitempty" gorm:"-"`
+	TotalRecipients   int64 `json:"total_recipients" gorm:"-"`
+	Attempted         int64 `json:"attempted" gorm:"-"`
+	Sent              int64 `json:"sent" gorm:"-"`
+	Failed            int64 `json:"failed" gorm:"-"`
+	Pending           int64 `json:"pending" gorm:"-"`
+	Partial           bool  `json:"partial,omitempty" gorm:"-"`
 }
 
 type WebhookEndpoint struct {
@@ -275,6 +314,11 @@ func (p *Pipeline) BeforeCreate(_ *gorm.DB) error     { ensureID(&p.ID); return 
 func (d *DealStage) BeforeCreate(_ *gorm.DB) error    { ensureID(&d.ID); return nil }
 func (d *Deal) BeforeCreate(_ *gorm.DB) error         { ensureID(&d.ID); return nil }
 func (b *BroadcastJob) BeforeCreate(_ *gorm.DB) error { ensureID(&b.ID); return nil }
+func (b *BroadcastRecipientProgress) BeforeCreate(_ *gorm.DB) error {
+	ensureID(&b.ID)
+	return nil
+}
+func (BroadcastRecipientProgress) TableName() string { return "broadcast_recipient_progress" }
 func (w *WebhookEndpoint) BeforeCreate(_ *gorm.DB) error {
 	ensureID(&w.ID)
 	return nil

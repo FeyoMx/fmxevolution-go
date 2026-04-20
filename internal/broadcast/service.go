@@ -15,10 +15,15 @@ import (
 )
 
 const (
-	statusQueued     = "queued"
-	statusProcessing = "processing"
-	statusCompleted  = "completed"
-	statusFailed     = "failed"
+	statusQueued                = "queued"
+	statusProcessing            = "processing"
+	statusCompleted             = "completed"
+	statusCompletedWithFailures = "completed_with_failures"
+	statusFailed                = "failed"
+
+	recipientStatusPending = "pending"
+	recipientStatusSent    = "sent"
+	recipientStatusFailed  = "failed"
 )
 
 type instanceFinder interface {
@@ -78,7 +83,7 @@ func NewService(repo repository.BroadcastRepository, instances instanceFinder, c
 		instances:      instances,
 		contacts:       contacts,
 		logger:         logger,
-		processor:      newDeliveryProcessor(instances, contacts, sender, logger),
+		processor:      newDeliveryProcessor(repo, instances, contacts, sender, logger),
 		workers:        workers,
 		claimBatchSize: claimBatchSize,
 		dispatchEvery:  2 * time.Second,
@@ -156,6 +161,12 @@ func (s *Service) Create(ctx context.Context, tenantID string, input CreateInput
 	if err := s.repo.Create(ctx, job); err != nil {
 		return nil, err
 	}
+	if err := s.seedRecipientSnapshot(ctx, job); err != nil {
+		return nil, err
+	}
+	if err := s.enrichJob(ctx, job, false); err != nil {
+		return nil, err
+	}
 	s.logger.Info("broadcast job queued", "tenant_id", tenantID, "instance_id", input.InstanceID, "message_length", len(input.Message), "available_at", availableAt)
 	return job, nil
 }
@@ -164,6 +175,9 @@ func (s *Service) Get(ctx context.Context, tenantID, jobID string) (*repository.
 	job, err := s.repo.GetByID(ctx, tenantID, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: broadcast job not found", domain.ErrNotFound)
+	}
+	if err := s.enrichJob(ctx, job, true); err != nil {
+		return nil, err
 	}
 	return job, nil
 }
@@ -175,7 +189,16 @@ func (s *Service) List(ctx context.Context, tenantID string, limit int) ([]repos
 	if limit > 200 {
 		limit = 200
 	}
-	return s.repo.ListByTenant(ctx, tenantID, limit)
+	jobs, err := s.repo.ListByTenant(ctx, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	for idx := range jobs {
+		if err := s.enrichJob(ctx, &jobs[idx], false); err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
 }
 
 func (s *Service) dispatcher(ctx context.Context) {
@@ -259,6 +282,20 @@ func (s *Service) handleJob(ctx context.Context, workerID string, job repository
 	}
 
 	completedAt := time.Now().UTC()
+	summary, err := s.repo.SummarizeRecipientProgress(ctx, job.TenantID, job.ID)
+	if err != nil {
+		s.logger.Error("summarize broadcast recipient progress", "worker_id", workerID, "job_id", job.ID, "error", err)
+		return
+	}
+	if summary.Failed > 0 {
+		message := fmt.Sprintf("broadcast completed with %d sent and %d failed recipients", summary.Sent, summary.Failed)
+		if err := s.repo.MarkCompletedWithFailures(ctx, job.TenantID, job.ID, message, completedAt); err != nil {
+			s.logger.Error("mark broadcast completed with failures", "worker_id", workerID, "job_id", job.ID, "error", err)
+			return
+		}
+		s.logger.Warn("broadcast job completed with failures", "worker_id", workerID, "job_id", job.ID, "tenant_id", job.TenantID, "instance_id", job.InstanceID, "sent", summary.Sent, "failed", summary.Failed)
+		return
+	}
 	if err := s.repo.MarkCompleted(ctx, job.TenantID, job.ID, completedAt); err != nil {
 		s.logger.Error("mark broadcast completed", "worker_id", workerID, "job_id", job.ID, "error", err)
 		return
@@ -296,6 +333,63 @@ func (s *Service) handleFailure(ctx context.Context, workerID string, job reposi
 	}
 
 	s.logger.Error("broadcast job failed permanently", fields...)
+}
+
+func (s *Service) enrichJob(ctx context.Context, job *repository.BroadcastJob, includeRecipients bool) error {
+	if job == nil {
+		return nil
+	}
+
+	summary, err := s.repo.SummarizeRecipientProgress(ctx, job.TenantID, job.ID)
+	if err != nil {
+		return err
+	}
+	summary.Partial = summary.TotalRecipients == 0 && job.Attempts > 0
+	job.RecipientAnalytics = summary
+	job.RecipientTotal = summary.TotalRecipients
+	job.RecipientAttempted = summary.Attempted
+	job.RecipientSent = summary.Sent
+	job.RecipientFailed = summary.Failed
+	job.RecipientPending = summary.Pending
+	job.RecipientPartial = summary.Partial
+
+	if includeRecipients {
+		recipients, err := s.repo.ListRecipientProgress(ctx, job.TenantID, job.ID)
+		if err != nil {
+			return err
+		}
+		job.Recipients = recipients
+	}
+
+	return nil
+}
+
+func (s *Service) seedRecipientSnapshot(ctx context.Context, job *repository.BroadcastJob) error {
+	if job == nil || s.contacts == nil {
+		return nil
+	}
+
+	contacts, err := s.contacts.ListContacts(ctx, job.TenantID)
+	if err != nil {
+		return err
+	}
+	recipients := eligibleBroadcastRecipients(contacts, job.InstanceID)
+	if len(recipients) == 0 {
+		return nil
+	}
+
+	records := make([]repository.BroadcastRecipientProgress, 0, len(recipients))
+	for _, recipient := range recipients {
+		records = append(records, repository.BroadcastRecipientProgress{
+			BroadcastID:    job.ID,
+			TenantID:       job.TenantID,
+			InstanceID:     job.InstanceID,
+			ContactID:      recipient.ContactID,
+			Phone:          recipient.Phone,
+			DeliveryStatus: recipientStatusPending,
+		})
+	}
+	return s.repo.SeedRecipientProgress(ctx, records)
 }
 
 type processorError struct {

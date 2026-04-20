@@ -11,14 +11,18 @@ import (
 )
 
 type broadcastRepoMock struct {
-	jobs         map[string]*repository.BroadcastJob
-	claimed      []repository.BroadcastJob
-	markFailedAt *time.Time
-	retryAt      *time.Time
+	jobs              map[string]*repository.BroadcastJob
+	claimed           []repository.BroadcastJob
+	recipientProgress map[string]map[string]*repository.BroadcastRecipientProgress
+	markFailedAt      *time.Time
+	retryAt           *time.Time
 }
 
 func newBroadcastRepoMock() *broadcastRepoMock {
-	return &broadcastRepoMock{jobs: make(map[string]*repository.BroadcastJob)}
+	return &broadcastRepoMock{
+		jobs:              make(map[string]*repository.BroadcastJob),
+		recipientProgress: make(map[string]map[string]*repository.BroadcastRecipientProgress),
+	}
 }
 
 func (m *broadcastRepoMock) Create(_ context.Context, job *repository.BroadcastJob) error {
@@ -59,6 +63,103 @@ func (m *broadcastRepoMock) CountByTenant(_ context.Context, tenantID string) (i
 	return total, nil
 }
 
+func (m *broadcastRepoMock) SeedRecipientProgress(_ context.Context, records []repository.BroadcastRecipientProgress) error {
+	for _, record := range records {
+		if record.ID == "" {
+			record.ID = "progress-" + record.BroadcastID + "-" + record.Phone
+		}
+		if _, ok := m.recipientProgress[record.BroadcastID]; !ok {
+			m.recipientProgress[record.BroadcastID] = make(map[string]*repository.BroadcastRecipientProgress)
+		}
+		if _, ok := m.recipientProgress[record.BroadcastID][record.Phone]; ok {
+			continue
+		}
+		copied := record
+		m.recipientProgress[record.BroadcastID][record.Phone] = &copied
+	}
+	return nil
+}
+
+func (m *broadcastRepoMock) SaveRecipientProgress(_ context.Context, progress *repository.BroadcastRecipientProgress) error {
+	if progress == nil {
+		return nil
+	}
+	if progress.ID == "" {
+		progress.ID = "progress-" + progress.BroadcastID + "-" + progress.Phone
+	}
+	if _, ok := m.recipientProgress[progress.BroadcastID]; !ok {
+		m.recipientProgress[progress.BroadcastID] = make(map[string]*repository.BroadcastRecipientProgress)
+	}
+	copied := *progress
+	m.recipientProgress[progress.BroadcastID][progress.Phone] = &copied
+	return nil
+}
+
+func (m *broadcastRepoMock) ListRecipientProgress(_ context.Context, tenantID, jobID string) ([]repository.BroadcastRecipientProgress, error) {
+	items := make([]repository.BroadcastRecipientProgress, 0)
+	for _, progress := range m.recipientProgress[jobID] {
+		if progress.TenantID != tenantID {
+			continue
+		}
+		items = append(items, *progress)
+	}
+	return items, nil
+}
+
+func (m *broadcastRepoMock) SummarizeRecipientProgress(_ context.Context, tenantID, jobID string) (repository.BroadcastRecipientAnalytics, error) {
+	var summary repository.BroadcastRecipientAnalytics
+	for _, progress := range m.recipientProgress[jobID] {
+		if progress.TenantID != tenantID {
+			continue
+		}
+		summary.TotalRecipients++
+		if progress.AttemptCount > 0 {
+			summary.Attempted++
+		}
+		switch progress.DeliveryStatus {
+		case recipientStatusSent:
+			summary.Sent++
+		case recipientStatusFailed:
+			summary.Failed++
+		default:
+			summary.Pending++
+		}
+	}
+	if summary.TotalRecipients > 0 {
+		summary.TrackedBroadcasts = 1
+	}
+	return summary, nil
+}
+
+func (m *broadcastRepoMock) SummarizeRecipientProgressByTenant(_ context.Context, tenantID string) (repository.BroadcastRecipientAnalytics, error) {
+	var summary repository.BroadcastRecipientAnalytics
+	for _, byPhone := range m.recipientProgress {
+		tracked := false
+		for _, progress := range byPhone {
+			if progress.TenantID != tenantID {
+				continue
+			}
+			tracked = true
+			summary.TotalRecipients++
+			if progress.AttemptCount > 0 {
+				summary.Attempted++
+			}
+			switch progress.DeliveryStatus {
+			case recipientStatusSent:
+				summary.Sent++
+			case recipientStatusFailed:
+				summary.Failed++
+			default:
+				summary.Pending++
+			}
+		}
+		if tracked {
+			summary.TrackedBroadcasts++
+		}
+	}
+	return summary, nil
+}
+
 func (m *broadcastRepoMock) ClaimNext(_ context.Context, workerID string, _ int, _ time.Time) ([]repository.BroadcastJob, error) {
 	return append([]repository.BroadcastJob(nil), m.claimed...), nil
 }
@@ -69,6 +170,17 @@ func (m *broadcastRepoMock) MarkCompleted(_ context.Context, tenantID, jobID str
 		return errors.New("record not found")
 	}
 	job.Status = statusCompleted
+	job.CompletedAt = &completedAt
+	return nil
+}
+
+func (m *broadcastRepoMock) MarkCompletedWithFailures(_ context.Context, tenantID, jobID, message string, completedAt time.Time) error {
+	job := m.jobs[jobID]
+	if job == nil || job.TenantID != tenantID {
+		return errors.New("record not found")
+	}
+	job.Status = statusCompletedWithFailures
+	job.LastError = message
 	job.CompletedAt = &completedAt
 	return nil
 }
@@ -186,6 +298,26 @@ func TestCreateBroadcastJobSetsAvailability(t *testing.T) {
 	}
 }
 
+func TestCreateBroadcastJobEnrichesRecipientAnalytics(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
+
+	job := &repository.BroadcastJob{ID: "job-analytics", TenantID: "tenant-1", InstanceID: "instance-1", Status: statusQueued}
+	repo.jobs[job.ID] = job
+	_ = repo.SeedRecipientProgress(context.Background(), []repository.BroadcastRecipientProgress{
+		{BroadcastID: job.ID, TenantID: "tenant-1", InstanceID: "instance-1", Phone: "1", DeliveryStatus: recipientStatusSent, AttemptCount: 1},
+		{BroadcastID: job.ID, TenantID: "tenant-1", InstanceID: "instance-1", Phone: "2", DeliveryStatus: recipientStatusPending, AttemptCount: 0},
+	})
+
+	enriched, err := service.Get(context.Background(), "tenant-1", job.ID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if enriched.RecipientSent != 1 || enriched.RecipientPending != 1 || len(enriched.Recipients) != 2 {
+		t.Fatalf("unexpected recipient analytics: %+v", enriched)
+	}
+}
+
 func TestHandleFailureReschedulesUntilMaxAttempts(t *testing.T) {
 	repo := newBroadcastRepoMock()
 	job := &repository.BroadcastJob{
@@ -246,7 +378,7 @@ func TestDeliveryProcessorSendsToEligibleContacts(t *testing.T) {
 		{ID: "c4", TenantID: "tenant-1", Phone: "523333333333", InstanceID: "instance-2"},
 	}}
 	sender := &senderMock{}
-	processor := newDeliveryProcessor(instanceRepoMock{}, contacts, sender, nilLogger())
+	processor := newDeliveryProcessor(newBroadcastRepoMock(), instanceRepoMock{}, contacts, sender, nilLogger())
 
 	err := processor.Process(context.Background(), repository.BroadcastJob{
 		ID:          "job-1",
@@ -267,7 +399,7 @@ func TestDeliveryProcessorSendsToEligibleContacts(t *testing.T) {
 }
 
 func TestDeliveryProcessorFailsWithoutEligibleContacts(t *testing.T) {
-	processor := newDeliveryProcessor(instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger())
+	processor := newDeliveryProcessor(newBroadcastRepoMock(), instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger())
 
 	err := processor.Process(context.Background(), repository.BroadcastJob{
 		ID:         "job-1",
@@ -283,13 +415,14 @@ func TestDeliveryProcessorFailsWithoutEligibleContacts(t *testing.T) {
 	}
 }
 
-func TestDeliveryProcessorDoesNotRetryPartialDeliveryFailures(t *testing.T) {
+func TestDeliveryProcessorPausesForRetryableFailureAfterPartialDelivery(t *testing.T) {
 	contacts := contactRepoMock{contacts: []repository.Contact{
 		{ID: "c1", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
 		{ID: "c2", TenantID: "tenant-1", Phone: "522222222222", InstanceID: "instance-1"},
 	}}
+	repo := newBroadcastRepoMock()
 	sender := &senderMock{errs: []error{nil, errors.New("runtime unavailable")}}
-	processor := newDeliveryProcessor(instanceRepoMock{}, contacts, sender, nilLogger())
+	processor := newDeliveryProcessor(repo, instanceRepoMock{}, contacts, sender, nilLogger())
 
 	err := processor.Process(context.Background(), repository.BroadcastJob{
 		ID:         "job-1",
@@ -300,8 +433,22 @@ func TestDeliveryProcessorDoesNotRetryPartialDeliveryFailures(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if isRetryableProcessorError(err) {
-		t.Fatal("expected partial delivery failure to be permanent")
+	if !isRetryableProcessorError(err) {
+		t.Fatal("expected partial delivery failure to remain retryable with durable checkpoints")
+	}
+
+	progress, _ := repo.ListRecipientProgress(context.Background(), "tenant-1", "job-1")
+	var sentCount, pendingCount int
+	for _, item := range progress {
+		switch item.DeliveryStatus {
+		case recipientStatusSent:
+			sentCount++
+		case recipientStatusPending:
+			pendingCount++
+		}
+	}
+	if sentCount != 1 || pendingCount != 1 {
+		t.Fatalf("unexpected progress after partial retryable failure: %+v", progress)
 	}
 }
 
@@ -310,7 +457,7 @@ func TestDeliveryProcessorDoesNotTreatEmptySendResultAsSuccess(t *testing.T) {
 		{ID: "c1", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
 	}}
 	sender := &senderMock{results: []*instance.SendTextResult{{}}}
-	processor := newDeliveryProcessor(instanceRepoMock{}, contacts, sender, nilLogger())
+	processor := newDeliveryProcessor(newBroadcastRepoMock(), instanceRepoMock{}, contacts, sender, nilLogger())
 
 	err := processor.Process(context.Background(), repository.BroadcastJob{
 		ID:         "job-1",
@@ -323,5 +470,103 @@ func TestDeliveryProcessorDoesNotTreatEmptySendResultAsSuccess(t *testing.T) {
 	}
 	if !isRetryableProcessorError(err) {
 		t.Fatal("expected empty send result without prior deliveries to remain retryable")
+	}
+}
+
+func TestDeliveryProcessorResumeSkipsAlreadySentRecipients(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	_ = repo.SeedRecipientProgress(context.Background(), []repository.BroadcastRecipientProgress{
+		{BroadcastID: "job-1", TenantID: "tenant-1", InstanceID: "instance-1", Phone: "521111111111", DeliveryStatus: recipientStatusSent, AttemptCount: 1},
+		{BroadcastID: "job-1", TenantID: "tenant-1", InstanceID: "instance-1", Phone: "522222222222", DeliveryStatus: recipientStatusPending},
+	})
+	sender := &senderMock{}
+	processor := newDeliveryProcessor(repo, instanceRepoMock{}, contactRepoMock{}, sender, nilLogger())
+
+	err := processor.Process(context.Background(), repository.BroadcastJob{
+		ID:         "job-1",
+		TenantID:   "tenant-1",
+		InstanceID: "instance-1",
+		Message:    "hello",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(sender.calls) != 1 || sender.calls[0].Number != "522222222222" {
+		t.Fatalf("expected resume to skip sent recipient, got %+v", sender.calls)
+	}
+}
+
+func TestDeliveryProcessorRetryableFailureLeavesRecipientPendingForResume(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	contacts := contactRepoMock{contacts: []repository.Contact{
+		{ID: "c1", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
+		{ID: "c2", TenantID: "tenant-1", Phone: "522222222222", InstanceID: "instance-1"},
+	}}
+	sender := &senderMock{errs: []error{nil, errors.New("runtime unavailable")}}
+	processor := newDeliveryProcessor(repo, instanceRepoMock{}, contacts, sender, nilLogger())
+
+	err := processor.Process(context.Background(), repository.BroadcastJob{
+		ID:         "job-1",
+		TenantID:   "tenant-1",
+		InstanceID: "instance-1",
+		Message:    "hello",
+	})
+	if err == nil || !isRetryableProcessorError(err) {
+		t.Fatalf("expected retryable error, got %v", err)
+	}
+
+	progress, _ := repo.ListRecipientProgress(context.Background(), "tenant-1", "job-1")
+	if len(progress) != 2 {
+		t.Fatalf("expected 2 recipient progress records, got %d", len(progress))
+	}
+	var sentCount, pendingAttempts int
+	for _, item := range progress {
+		switch item.Phone {
+		case "521111111111":
+			if item.DeliveryStatus == recipientStatusSent {
+				sentCount++
+			}
+		case "522222222222":
+			if item.DeliveryStatus == recipientStatusPending && item.AttemptCount == 1 {
+				pendingAttempts++
+			}
+		}
+	}
+	if sentCount != 1 || pendingAttempts != 1 {
+		t.Fatalf("unexpected persisted progress: %+v", progress)
+	}
+}
+
+func TestDeliveryProcessorPermanentRecipientFailureDoesNotBlockOtherRecipients(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	contacts := contactRepoMock{contacts: []repository.Contact{
+		{ID: "c1", TenantID: "tenant-1", Phone: "521111111111", InstanceID: "instance-1"},
+		{ID: "c2", TenantID: "tenant-1", Phone: "522222222222", InstanceID: "instance-1"},
+	}}
+	sender := &senderMock{errs: []error{errors.New("validation failed: bad number"), nil}}
+	processor := newDeliveryProcessor(repo, instanceRepoMock{}, contacts, sender, nilLogger())
+
+	err := processor.Process(context.Background(), repository.BroadcastJob{
+		ID:         "job-1",
+		TenantID:   "tenant-1",
+		InstanceID: "instance-1",
+		Message:    "hello",
+	})
+	if err != nil {
+		t.Fatalf("expected processor to continue after permanent recipient failure, got %v", err)
+	}
+
+	progress, _ := repo.ListRecipientProgress(context.Background(), "tenant-1", "job-1")
+	var failedCount, sentCount int
+	for _, item := range progress {
+		switch item.DeliveryStatus {
+		case recipientStatusFailed:
+			failedCount++
+		case recipientStatusSent:
+			sentCount++
+		}
+	}
+	if failedCount != 1 || sentCount != 1 {
+		t.Fatalf("unexpected persisted progress: %+v", progress)
 	}
 }

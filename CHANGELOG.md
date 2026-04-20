@@ -25,7 +25,9 @@
 - Added broadcast queueing, worker claiming, retry scheduling, and rate pacing
 - Replaced the broadcast noop processor with real WhatsApp text delivery using the existing tenant-safe instance send path
 - Scoped broadcast recipient resolution to tenant CRM contacts, with support for instance-specific or tenant-wide contacts and de-duplication by phone
-- Hardened broadcast failure semantics so partial deliveries fail permanently instead of retrying and risking duplicate sends without recipient-level checkpoints
+- Added durable `broadcast_recipient_progress` tracking with per-recipient status, attempt counts, timestamps, errors, and send references
+- Snapshotted broadcast recipient audiences from tenant CRM contacts so retries can resume safely from durable checkpoints
+- Hardened broadcast failure semantics so retryable failures resume from pending recipients while permanent recipient failures are tracked without duplicating recipients already sent
 - Added richer broadcast execution logs for job claiming, per-job processing, and per-recipient send attempts/failures
 - Hardened broadcast success semantics so a job is not treated as delivered unless the instance send path returns a confirmed send result
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
@@ -34,6 +36,7 @@
 - Added the missing `conversation_messages` table to the SQL baseline migration so tenant-safe message history search no longer depends on runtime auto-migrate to exist
 - Added dashboard metrics endpoint with real tenant-scoped instance, contact, and broadcast counts plus runtime health buckets
 - Counted `messages_total` from stored tenant conversation history and marked it explicitly partial because it reflects SaaS-observed history, not universal WhatsApp history
+- Added real broadcast recipient analytics totals for total, attempted, sent, failed, and pending recipients, with partial flags for older jobs that predate recipient tracking
 
 ### Legacy runtime bridge and compatibility
 
@@ -100,7 +103,9 @@
 - Message-history parity is now usable, but inbound completeness is still partial because there is no backfill from older sessions or full upstream replay into the SaaS read model
 - Durable runtime status/history reads no longer require the live bridge, but live snapshots and connection actions still do
 - Replay/backfill improves inbound message completeness, but it still cannot reconstruct a full older connection/logout timeline from the bridge alone
-- Broadcast jobs now make real send attempts, but there is still no recipient-level progress persistence or delivery analytics on the job record
+- Historical broadcasts created before recipient tracking may still report partial recipient analytics until they are re-run or backfilled
+- Repo-root temp utilities now use `//go:build ignore`, removing them as `go test ./...` blockers
+- Repo-wide tests are still partially blocked by legacy `github.com/chai2010/webp` build failures outside the SaaS API sprint slice
 
 ### MVP hardening
 

@@ -30,11 +30,16 @@ func (m metricsContactRepoMock) CountContactsByTenant(_ context.Context, tenantI
 }
 
 type metricsCounterMock struct {
-	totals map[string]int64
+	totals             map[string]int64
+	recipientSummaries map[string]repository.BroadcastRecipientAnalytics
 }
 
 func (m metricsCounterMock) CountByTenant(_ context.Context, tenantID string) (int64, error) {
 	return m.totals[tenantID], nil
+}
+
+func (m metricsCounterMock) SummarizeRecipientProgressByTenant(_ context.Context, tenantID string) (repository.BroadcastRecipientAnalytics, error) {
+	return m.recipientSummaries[tenantID], nil
 }
 
 type metricsRuntimeRepoMock struct {
@@ -60,7 +65,19 @@ func TestMetricsUsesRealStoredCountsAndRuntimeHealth(t *testing.T) {
 		}},
 		metricsContactRepoMock{totals: map[string]int64{"tenant-1": 7}},
 		metricsCounterMock{totals: map[string]int64{"tenant-1": 42}},
-		metricsCounterMock{totals: map[string]int64{"tenant-1": 3}},
+		metricsCounterMock{
+			totals: map[string]int64{"tenant-1": 3},
+			recipientSummaries: map[string]repository.BroadcastRecipientAnalytics{
+				"tenant-1": {
+					TrackedBroadcasts: 2,
+					TotalRecipients:   10,
+					Attempted:         8,
+					Sent:              6,
+					Failed:            1,
+					Pending:           3,
+				},
+			},
+		},
 		metricsRuntimeRepoMock{states: []repository.RuntimeSessionState{
 			{TenantID: "tenant-1", InstanceID: "i1", Connected: true, Status: "open"},
 			{TenantID: "tenant-1", InstanceID: "i2", PairingActive: true, Status: "connecting"},
@@ -83,6 +100,12 @@ func TestMetricsUsesRealStoredCountsAndRuntimeHealth(t *testing.T) {
 	}
 	if snapshot.BroadcastTotal != 3 {
 		t.Fatalf("expected broadcast total 3, got %d", snapshot.BroadcastTotal)
+	}
+	if snapshot.BroadcastRecipients.TotalRecipients != 10 || snapshot.BroadcastRecipients.Sent != 6 {
+		t.Fatalf("unexpected broadcast recipient analytics: %+v", snapshot.BroadcastRecipients)
+	}
+	if !snapshot.BroadcastRecipients.Partial {
+		t.Fatal("expected broadcast recipient analytics to be partial when not every broadcast is tracked")
 	}
 	if snapshot.InstancesActive != 2 {
 		t.Fatalf("expected 2 active instances from runtime-backed counts plus fallback, got %d", snapshot.InstancesActive)

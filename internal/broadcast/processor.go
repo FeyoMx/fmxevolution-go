@@ -13,14 +13,16 @@ import (
 )
 
 type deliveryProcessor struct {
+	repo      repository.BroadcastRepository
 	instances instanceFinder
 	contacts  contactLister
 	sender    textSender
 	logger    *slog.Logger
 }
 
-func newDeliveryProcessor(instances instanceFinder, contacts contactLister, sender textSender, logger *slog.Logger) processor {
+func newDeliveryProcessor(repo repository.BroadcastRepository, instances instanceFinder, contacts contactLister, sender textSender, logger *slog.Logger) processor {
 	return &deliveryProcessor{
+		repo:      repo,
 		instances: instances,
 		contacts:  contacts,
 		sender:    sender,
@@ -29,7 +31,7 @@ func newDeliveryProcessor(instances instanceFinder, contacts contactLister, send
 }
 
 func (p *deliveryProcessor) Process(ctx context.Context, job repository.BroadcastJob) error {
-	if p.instances == nil || p.contacts == nil || p.sender == nil {
+	if p.repo == nil || p.instances == nil || p.contacts == nil || p.sender == nil {
 		return permanentProcessorError(fmt.Errorf("%w: broadcast delivery dependencies are unavailable", domain.ErrConflict))
 	}
 
@@ -45,25 +47,43 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		return permanentProcessorError(fmt.Errorf("%w: broadcast instance not found for tenant", domain.ErrForbidden))
 	}
 
-	contacts, err := p.contacts.ListContacts(ctx, job.TenantID)
+	progress, err := p.loadOrSeedRecipientProgress(ctx, job)
 	if err != nil {
-		return retryableProcessorError(fmt.Errorf("load broadcast contacts: %w", err))
+		return err
 	}
-
-	recipients := eligibleBroadcastRecipients(contacts, job.InstanceID)
-	if len(recipients) == 0 {
+	if len(progress) == 0 {
 		return permanentProcessorError(fmt.Errorf("%w: no eligible contacts available for this instance broadcast", domain.ErrConflict))
 	}
 
-	sentCount := 0
-	for idx, recipient := range recipients {
+	pending := pendingRecipientProgress(progress)
+	if len(pending) == 0 {
+		if p.logger != nil {
+			p.logger.Info(
+				"broadcast resume found no pending recipients",
+				"job_id", job.ID,
+				"tenant_id", job.TenantID,
+				"instance_id", job.InstanceID,
+				"recipient_total", len(progress),
+			)
+		}
+		return nil
+	}
+
+	for idx := range pending {
+		recipient := pending[idx]
 		if idx > 0 {
 			if err := waitForRecipientPacing(ctx, job.RatePerHour); err != nil {
-				if sentCount > 0 {
-					return permanentProcessorError(fmt.Errorf("broadcast partially delivered to %d/%d contacts before pacing interruption: %w", sentCount, len(recipients), err))
-				}
-				return retryableProcessorError(fmt.Errorf("broadcast pacing interrupted before first delivery: %w", err))
+				return retryableProcessorError(fmt.Errorf("broadcast pacing interrupted before recipient %s: %w", recipient.Phone, err))
 			}
+		}
+
+		attemptedAt := time.Now().UTC()
+		recipient.AttemptCount++
+		recipient.LastAttemptAt = &attemptedAt
+		recipient.LastError = ""
+		recipient.DeliveryStatus = recipientStatusPending
+		if err := p.repo.SaveRecipientProgress(ctx, &recipient); err != nil {
+			return retryableProcessorError(fmt.Errorf("persist broadcast recipient attempt for %s: %w", recipient.Phone, err))
 		}
 
 		if p.logger != nil {
@@ -74,8 +94,8 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 				"instance_id", job.InstanceID,
 				"recipient", recipient.Phone,
 				"recipient_index", idx+1,
-				"recipient_total", len(recipients),
-				"attempt", job.Attempts,
+				"recipient_total", len(progress),
+				"attempt", recipient.AttemptCount,
 				"max_attempts", job.MaxAttempts,
 			)
 		}
@@ -85,6 +105,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 			Text:   job.Message,
 		})
 		if sendErr != nil {
+			recipient.LastError = sendErr.Error()
 			if p.logger != nil {
 				p.logger.Warn(
 					"broadcast recipient send failed",
@@ -93,22 +114,33 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 					"instance_id", job.InstanceID,
 					"recipient", recipient.Phone,
 					"recipient_index", idx+1,
-					"recipient_total", len(recipients),
-					"attempt", job.Attempts,
+					"recipient_total", len(progress),
+					"attempt", recipient.AttemptCount,
 					"max_attempts", job.MaxAttempts,
 					"error", sendErr.Error(),
 				)
 			}
-			if sentCount > 0 {
-				return permanentProcessorError(fmt.Errorf("broadcast partially delivered to %d/%d contacts before failing on %s: %w", sentCount, len(recipients), recipient.Phone, sendErr))
-			}
 			if isPermanentSendError(sendErr) {
-				return permanentProcessorError(fmt.Errorf("broadcast delivery failed before first send attempt completed: %w", sendErr))
+				failedAt := time.Now().UTC()
+				recipient.DeliveryStatus = recipientStatusFailed
+				recipient.FailedAt = &failedAt
+				if err := p.repo.SaveRecipientProgress(ctx, &recipient); err != nil {
+					return retryableProcessorError(fmt.Errorf("persist permanent broadcast recipient failure for %s: %w", recipient.Phone, err))
+				}
+				continue
 			}
-			return retryableProcessorError(fmt.Errorf("broadcast delivery failed before first send attempt completed: %w", sendErr))
+			recipient.DeliveryStatus = recipientStatusPending
+			recipient.FailedAt = nil
+			if err := p.repo.SaveRecipientProgress(ctx, &recipient); err != nil {
+				return retryableProcessorError(fmt.Errorf("persist retryable broadcast recipient failure for %s: %w", recipient.Phone, err))
+			}
+			return retryableProcessorError(fmt.Errorf("broadcast delivery paused after retryable failure on %s: %w", recipient.Phone, sendErr))
 		}
 		if !isConfirmedSendAttempt(result) {
 			reason := fmt.Errorf("instance send path returned no delivery evidence for recipient %s", recipient.Phone)
+			recipient.DeliveryStatus = recipientStatusPending
+			recipient.LastError = reason.Error()
+			recipient.FailedAt = nil
 			if p.logger != nil {
 				p.logger.Warn(
 					"broadcast recipient send returned no delivery evidence",
@@ -117,18 +149,31 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 					"instance_id", job.InstanceID,
 					"recipient", recipient.Phone,
 					"recipient_index", idx+1,
-					"recipient_total", len(recipients),
-					"attempt", job.Attempts,
+					"recipient_total", len(progress),
+					"attempt", recipient.AttemptCount,
 					"max_attempts", job.MaxAttempts,
 				)
 			}
-			if sentCount > 0 {
-				return permanentProcessorError(fmt.Errorf("broadcast partially delivered to %d/%d contacts before encountering an unconfirmed send result on %s: %w", sentCount, len(recipients), recipient.Phone, reason))
+			if err := p.repo.SaveRecipientProgress(ctx, &recipient); err != nil {
+				return retryableProcessorError(fmt.Errorf("persist unconfirmed broadcast recipient result for %s: %w", recipient.Phone, err))
 			}
-			return retryableProcessorError(fmt.Errorf("broadcast delivery failed before first send attempt completed: %w", reason))
+			return retryableProcessorError(fmt.Errorf("broadcast delivery paused after unconfirmed send result on %s: %w", recipient.Phone, reason))
 		}
 
-		sentCount++
+		sentAt := attemptedAt
+		if !result.Timestamp.IsZero() {
+			sentAt = result.Timestamp.UTC()
+		}
+		recipient.DeliveryStatus = recipientStatusSent
+		recipient.LastError = ""
+		recipient.SentAt = &sentAt
+		recipient.FailedAt = nil
+		recipient.MessageID = strings.TrimSpace(result.MessageID)
+		recipient.ServerID = result.ServerID
+		recipient.ChatJID = strings.TrimSpace(result.Chat)
+		if err := p.repo.SaveRecipientProgress(ctx, &recipient); err != nil {
+			return retryableProcessorError(fmt.Errorf("persist broadcast recipient success for %s: %w", recipient.Phone, err))
+		}
 		if p.logger != nil {
 			p.logger.Info(
 				"broadcast recipient delivered",
@@ -136,19 +181,34 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 				"tenant_id", job.TenantID,
 				"instance_id", job.InstanceID,
 				"recipient", recipient.Phone,
-				"recipient_index", sentCount,
-				"recipient_total", len(recipients),
+				"recipient_index", idx+1,
+				"recipient_total", len(progress),
+				"message_id", recipient.MessageID,
 			)
 		}
 	}
 
 	if p.logger != nil {
+		summary, summaryErr := p.repo.SummarizeRecipientProgress(ctx, job.TenantID, job.ID)
+		if summaryErr == nil {
+			p.logger.Info(
+				"broadcast delivery completed",
+				"job_id", job.ID,
+				"tenant_id", job.TenantID,
+				"instance_id", job.InstanceID,
+				"recipient_total", summary.TotalRecipients,
+				"recipient_sent", summary.Sent,
+				"recipient_failed", summary.Failed,
+				"recipient_pending", summary.Pending,
+			)
+			return nil
+		}
 		p.logger.Info(
 			"broadcast delivery completed",
 			"job_id", job.ID,
 			"tenant_id", job.TenantID,
 			"instance_id", job.InstanceID,
-			"recipient_total", len(recipients),
+			"recipient_total", len(progress),
 		)
 	}
 
@@ -166,7 +226,8 @@ func isConfirmedSendAttempt(result *instance.SendTextResult) bool {
 }
 
 type broadcastRecipient struct {
-	Phone string
+	ContactID *string
+	Phone     string
 }
 
 func eligibleBroadcastRecipients(contacts []repository.Contact, instanceID string) []broadcastRecipient {
@@ -185,10 +246,65 @@ func eligibleBroadcastRecipients(contacts []repository.Contact, instanceID strin
 			continue
 		}
 		seen[phone] = struct{}{}
-		recipients = append(recipients, broadcastRecipient{Phone: phone})
+		var contactID *string
+		if strings.TrimSpace(contact.ID) != "" {
+			id := strings.TrimSpace(contact.ID)
+			contactID = &id
+		}
+		recipients = append(recipients, broadcastRecipient{ContactID: contactID, Phone: phone})
 	}
 
 	return recipients
+}
+
+func (p *deliveryProcessor) loadOrSeedRecipientProgress(ctx context.Context, job repository.BroadcastJob) ([]repository.BroadcastRecipientProgress, error) {
+	progress, err := p.repo.ListRecipientProgress(ctx, job.TenantID, job.ID)
+	if err != nil {
+		return nil, retryableProcessorError(fmt.Errorf("load broadcast recipient progress: %w", err))
+	}
+	if len(progress) > 0 {
+		return progress, nil
+	}
+
+	contacts, err := p.contacts.ListContacts(ctx, job.TenantID)
+	if err != nil {
+		return nil, retryableProcessorError(fmt.Errorf("load broadcast contacts: %w", err))
+	}
+
+	recipients := eligibleBroadcastRecipients(contacts, job.InstanceID)
+	if len(recipients) == 0 {
+		return nil, nil
+	}
+
+	seed := make([]repository.BroadcastRecipientProgress, 0, len(recipients))
+	for _, recipient := range recipients {
+		seed = append(seed, repository.BroadcastRecipientProgress{
+			BroadcastID:    job.ID,
+			TenantID:       job.TenantID,
+			InstanceID:     job.InstanceID,
+			ContactID:      recipient.ContactID,
+			Phone:          recipient.Phone,
+			DeliveryStatus: recipientStatusPending,
+		})
+	}
+	if err := p.repo.SeedRecipientProgress(ctx, seed); err != nil {
+		return nil, retryableProcessorError(fmt.Errorf("seed broadcast recipient progress: %w", err))
+	}
+
+	return p.repo.ListRecipientProgress(ctx, job.TenantID, job.ID)
+}
+
+func pendingRecipientProgress(progress []repository.BroadcastRecipientProgress) []repository.BroadcastRecipientProgress {
+	pending := make([]repository.BroadcastRecipientProgress, 0, len(progress))
+	for _, item := range progress {
+		switch strings.ToLower(strings.TrimSpace(item.DeliveryStatus)) {
+		case recipientStatusSent, recipientStatusFailed:
+			continue
+		default:
+			pending = append(pending, item)
+		}
+	}
+	return pending
 }
 
 func waitForRecipientPacing(ctx context.Context, ratePerHour int) error {

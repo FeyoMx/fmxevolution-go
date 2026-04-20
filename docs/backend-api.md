@@ -92,6 +92,7 @@ Notes:
 - `contacts_total` is counted from stored tenant CRM contacts
 - `broadcast_total` is counted from stored tenant broadcast jobs
 - `messages_total` is counted from stored tenant `conversation_messages` rows and is explicitly flagged as partial because it only reflects messages observed, sent, or backfilled into the SaaS read model
+- broadcast recipient aggregates are exposed through `broadcast_recipients_total`, `broadcast_recipients_attempted`, `broadcast_recipients_sent`, `broadcast_recipients_failed`, `broadcast_recipients_pending`, and `broadcast_recipients_partial`
 - runtime health is exposed through `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
 
 ## AI
@@ -407,18 +408,31 @@ Rate limiting:
 Delivery behavior:
 
 - the worker now performs real WhatsApp text send attempts through the existing tenant-safe instance text-send path
-- recipient resolution is currently derived from tenant CRM contacts whose `instance_id` is either empty or matches the target instance
-- duplicate contact phones are de-duplicated before delivery
-- the job is only marked `completed` after every eligible recipient send returns a confirmed send result from the supported instance text-send path
-- if the job cannot reach the runtime or fails before the first successful send, normal retry scheduling still applies
-- if a failure happens after one or more recipients were already sent, the job is marked `failed` with a partial-delivery error instead of retrying and risking duplicate sends
-- if the instance send path returns no delivery evidence for a recipient, the job is not treated as a success
+- recipient resolution is snapshotted into durable `broadcast_recipient_progress` rows using tenant CRM contacts whose `instance_id` is either empty or matches the target instance
+- duplicate contact phones are de-duplicated before the snapshot is seeded
+- retries resume only recipients whose `delivery_status` is still `pending`
+- recipients already marked `sent` are skipped on retry, which makes retry/resume idempotent at recipient level
+- permanent recipient errors mark only that recipient `failed` and allow the job to continue with the rest of the audience
+- retryable recipient errors pause the job, keep the current recipient `pending`, and rely on normal job retry scheduling to resume from the remaining pending recipients
+- if the instance send path returns no delivery evidence for a recipient, that recipient stays `pending` and the job is not treated as successful for that recipient
+- the job is marked `completed` when all tracked recipients are `sent`
+- the job is marked `completed_with_failures` when all tracked recipients are terminal but at least one recipient is `failed`
+
+Recipient progress on `BroadcastJob` detail:
+
+- `recipient_total`
+- `recipient_attempted`
+- `recipient_sent`
+- `recipient_failed`
+- `recipient_pending`
+- `recipient_partial`
+- `recipient_analytics`
+- `recipients`
 
 Current limitation:
 
 - broadcast execution is text-only and currently targets CRM contacts, not arbitrary imported lists
-- there is still no per-recipient progress, success-total, or failure-total analytics on the `BroadcastJob` record
-- if a job partially delivers and then fails, the backend intentionally stops retrying that job because it does not yet persist recipient-level progress checkpoints
+- historical jobs created before recipient progress was introduced may report `recipient_partial: true` until they are re-run or otherwise seeded with recipient progress
 
 ## Webhooks
 
