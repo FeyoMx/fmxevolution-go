@@ -21,13 +21,16 @@ const (
 	statusCompletedWithFailures = "completed_with_failures"
 	statusFailed                = "failed"
 
-	recipientStatusPending = "pending"
-	recipientStatusSent    = "sent"
-	recipientStatusFailed  = "failed"
+	recipientStatusPending   = "pending"
+	recipientStatusSent      = "sent"
+	recipientStatusDelivered = "delivered"
+	recipientStatusRead      = "read"
+	recipientStatusFailed    = "failed"
 )
 
 type instanceFinder interface {
 	GetByID(ctx context.Context, tenantID, instanceID string) (*repository.Instance, error)
+	GetByGlobalID(ctx context.Context, instanceID string) (*repository.Instance, error)
 }
 
 type contactLister interface {
@@ -101,7 +104,11 @@ type RecipientListItem struct {
 	LastError      string     `json:"last_error,omitempty"`
 	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
 	SentAt         *time.Time `json:"sent_at,omitempty"`
+	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	ReadAt         *time.Time `json:"read_at,omitempty"`
 	FailedAt       *time.Time `json:"failed_at,omitempty"`
+	LastStatusAt   *time.Time `json:"last_status_at,omitempty"`
+	StatusSource   string     `json:"status_source,omitempty"`
 	MessageID      string     `json:"message_id,omitempty"`
 	ServerID       int64      `json:"server_id,omitempty"`
 	ChatJID        string     `json:"chat_jid,omitempty"`
@@ -287,7 +294,11 @@ func (s *Service) ListRecipients(ctx context.Context, tenantID, jobID string, in
 			LastError:      item.LastError,
 			LastAttemptAt:  item.LastAttemptAt,
 			SentAt:         item.SentAt,
+			DeliveredAt:    item.DeliveredAt,
+			ReadAt:         item.ReadAt,
 			FailedAt:       item.FailedAt,
+			LastStatusAt:   item.LastStatusAt,
+			StatusSource:   item.StatusSource,
 			MessageID:      item.MessageID,
 			ServerID:       item.ServerID,
 			ChatJID:        item.ChatJID,
@@ -460,6 +471,37 @@ func (s *Service) enrichJob(ctx context.Context, job *repository.BroadcastJob, i
 	return nil
 }
 
+func (s *Service) HandleReceipt(ctx context.Context, instanceID, messageID, state string, at time.Time) error {
+	if s == nil || s.repo == nil || s.instances == nil {
+		return nil
+	}
+
+	instanceRecord, err := s.instances.GetByGlobalID(ctx, strings.TrimSpace(instanceID))
+	if err != nil {
+		return err
+	}
+	if instanceRecord == nil {
+		return nil
+	}
+
+	updated, err := s.repo.MarkRecipientReceipt(ctx, instanceRecord.TenantID, instanceRecord.ID, messageID, state, at)
+	if err != nil {
+		return err
+	}
+	if updated && s.logger != nil {
+		s.logger.Info(
+			"broadcast recipient receipt recorded",
+			"tenant_id", instanceRecord.TenantID,
+			"instance_id", instanceRecord.ID,
+			"message_id", strings.TrimSpace(messageID),
+			"state", strings.ToLower(strings.TrimSpace(state)),
+			"at", at.UTC(),
+		)
+	}
+
+	return nil
+}
+
 func (s *Service) seedRecipientSnapshot(ctx context.Context, job *repository.BroadcastJob) error {
 	if job == nil || s.contacts == nil {
 		return nil
@@ -593,7 +635,7 @@ func normalizeRecipientListFilter(input ListRecipientsInput) (repository.Broadca
 
 	status := strings.ToLower(strings.TrimSpace(input.Status))
 	switch status {
-	case "", recipientStatusPending, recipientStatusSent, recipientStatusFailed:
+	case "", recipientStatusPending, recipientStatusSent, recipientStatusDelivered, recipientStatusRead, recipientStatusFailed:
 		filter.Status = status
 	default:
 		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: unsupported recipient status filter", domain.ErrValidation)

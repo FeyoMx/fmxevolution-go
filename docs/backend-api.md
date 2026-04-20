@@ -93,6 +93,7 @@ Notes:
 - `broadcast_total` is counted from stored tenant broadcast jobs
 - `messages_total` is counted from stored tenant `conversation_messages` rows and is explicitly flagged as partial because it only reflects messages observed, sent, or backfilled into the SaaS read model
 - broadcast recipient aggregates are exposed through `broadcast_recipients_total`, `broadcast_recipients_attempted`, `broadcast_recipients_sent`, `broadcast_recipients_failed`, `broadcast_recipients_pending`, and `broadcast_recipients_partial`
+- richer broadcast receipt aggregates are exposed through `broadcast_recipients_delivered` and `broadcast_recipients_read` when durable runtime receipt updates have been observed
 - runtime health is exposed through `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
 
 ## AI
@@ -425,6 +426,8 @@ Recipient progress on `BroadcastJob` detail:
 - `recipient_total`
 - `recipient_attempted`
 - `recipient_sent`
+- `recipient_analytics.delivered`
+- `recipient_analytics.read`
 - `recipient_failed`
 - `recipient_pending`
 - `recipient_partial`
@@ -448,6 +451,8 @@ Recipient progress listing response on `GET /broadcast/:id/recipients`:
     "total_recipients": 1324,
     "attempted": 1300,
     "sent": 1201,
+    "delivered": 1180,
+    "read": 942,
     "failed": 99,
     "pending": 24,
     "partial": false
@@ -459,11 +464,15 @@ Recipient progress listing response on `GET /broadcast/:id/recipients`:
       "broadcast_id": "job-uuid",
       "contact_id": "contact-uuid",
       "phone": "5215512345678",
-      "delivery_status": "failed",
+      "delivery_status": "read",
       "attempt_count": 2,
-      "last_error": "validation failed: bad number",
+      "last_error": "",
       "last_attempt_at": "2026-04-19T18:20:10Z",
-      "failed_at": "2026-04-19T18:20:10Z",
+      "sent_at": "2026-04-19T18:19:54Z",
+      "delivered_at": "2026-04-19T18:20:04Z",
+      "read_at": "2026-04-19T18:20:10Z",
+      "last_status_at": "2026-04-19T18:20:10Z",
+      "status_source": "receipt_read",
       "message_id": "",
       "server_id": 0,
       "chat_jid": ""
@@ -474,19 +483,20 @@ Recipient progress listing response on `GET /broadcast/:id/recipients`:
 
 Recipient listing notes:
 
-- `status` currently supports only `pending`, `sent`, and `failed`
+ - `status` currently supports `pending`, `sent`, `delivered`, `read`, and `failed`
 - `query` is optional and currently searches durable recipient `phone` plus `contact_id` text when present
 - the endpoint returns only durable recipient progress already stored for that tenant-scoped broadcast
 - `summary` reflects whole-broadcast durable recipient analytics, not just the current page
 - `partial` is `true` only when the broadcast has no durable recipient progress snapshot, which can happen on historical jobs created before recipient tracking existed
-- no receipt or post-send delivery state is invented here; `delivery_status` is limited to the stored recipient progress state
+- no receipt or post-send delivery state is invented here; `delivery_status` advances beyond `sent` only when a real runtime receipt has been durably matched back to that recipient row
+- `status_source` is best-effort and currently distinguishes send-result progression (`send_result`) from runtime receipt progression (`receipt_delivered`, `receipt_read`)
 
 Current limitation:
 
 - broadcast execution is text-only and currently targets CRM contacts, not arbitrary imported lists
 - historical jobs created before recipient progress was introduced may report `recipient_partial: true` until they are re-run or otherwise seeded with recipient progress
 - recipient detail currently exposes stored phone and `contact_id`, but not an enriched contact-name join
-- recipient detail does not yet update from post-send delivery receipts, so `sent` means the send path returned a confirmed send result, not a later WhatsApp delivery/read receipt
+- richer recipient receipt progression is best-effort and runtime-dependent; recipients stay at `sent` when no later receipt is observed or safely mappable
 
 ## Webhooks
 

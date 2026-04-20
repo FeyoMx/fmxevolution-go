@@ -61,6 +61,7 @@ Readiness notes:
 - `contacts_total` and `broadcast_total` are now counted from stored tenant data.
 - `messages_total` is now counted from stored tenant conversation history and explicitly flagged partial.
 - Broadcast recipient totals, attempted, sent, failed, and pending are now counted from durable recipient progress rows and explicitly flagged partial when some historical jobs have no recipient snapshot yet.
+- Broadcast recipient aggregates now also expose durable `delivered` and `read` counts when runtime receipt events can be safely matched back to recipient progress rows.
 - Runtime health counters are now exposed as healthy/degraded/unavailable/unknown buckets with a partial flag when some instances have no durable runtime state yet.
 
 ### AI
@@ -223,8 +224,9 @@ Readiness notes:
 - Permanent recipient failures are tracked per recipient and surfaced in job analytics.
 - Broadcast jobs can now finish as `completed_with_failures` when the audience is fully processed but some recipients are terminal failures.
 - Broadcast detail is now operator-friendly for larger campaigns because recipient progress can be paginated and filtered by `pending`, `sent`, and `failed`.
-- Recipient listing returns durable operator-facing fields such as phone, `contact_id`, attempt count, last error, timestamps, and send references when available.
-- Broadcast recipient listing stays truthful: it exposes only stored recipient progress and whole-broadcast durable summary counts, without inventing downstream delivery receipt states.
+- Broadcast detail is now operator-friendly for larger campaigns because recipient progress can be paginated and filtered by `pending`, `sent`, `delivered`, `read`, and `failed`.
+- Recipient listing returns durable operator-facing fields such as phone, `contact_id`, attempt count, last error, timestamps, send references, and receipt progression metadata when available.
+- Broadcast recipient listing stays truthful: it exposes only stored recipient progress and whole-broadcast durable summary counts, without inventing downstream delivery receipt states. `delivered` and `read` are best-effort and appear only when real runtime receipts are safely mapped back by durable identifiers.
 
 ### Webhooks
 
@@ -356,7 +358,6 @@ These capabilities are still missing from the active SaaS surface even though th
 - tenant-safe CRUD for OpenAI, Typebot, Dify, N8N, EvoAI, EvolutionBot, and Flowise
 - full upstream chat-history replay/backfill parity
 - old historical broadcasts created before recipient progress tracking may still show partial recipient analytics
-- broadcast recipient detail is still operational rather than forensic: there is no post-send delivery receipt update loop yet
 - full product analytics beyond tenant-scoped operational counts
 
 ## Known Technical Debt
@@ -374,6 +375,6 @@ These capabilities are still missing from the active SaaS surface even though th
 
 1. Add operator-safe throttling or caching around live chat-list queries so bridge rate limits do not degrade MVP UX.
 2. Tighten targeted integration tests around auth, runtime actions, message search, and backfill envelopes.
-3. Wire recipient progress to post-send delivery receipts so operators can distinguish accepted sends from delivered/read states where the runtime truly emits them.
+3. Add operator-facing broadcast recipient exports or cursor-based pagination for very large campaigns if list sizes outgrow the current page model.
 4. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.
 5. Decide which manager integration suites are true product priorities and keep the rest explicitly unsupported.

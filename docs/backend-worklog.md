@@ -109,7 +109,10 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - broadcast success now requires a confirmed send result from the instance send path instead of treating an empty result as delivered
 - broadcast detail now has a dedicated tenant-safe `GET /broadcast/:id/recipients` endpoint with bounded pagination, status filters, and optional phone/contact search
 - recipient progress listing returns whole-broadcast durable summary counts plus paginated operator-facing recipient rows for large campaign inspection
-- recipient detail remains truthful by exposing only durable progress states (`pending`, `sent`, `failed`) and by marking old pre-progress broadcasts as partial when needed
+- recipient detail remains truthful by exposing only durable progress states (`pending`, `sent`, `delivered`, `read`, `failed`) and by marking old pre-progress broadcasts as partial when needed
+- runtime delivery/read receipts are now wired back into broadcast recipient progress when the SaaS layer can safely match `instance_id + message_id` to a stored recipient row
+- recipient progress can now advance from `sent` to `delivered` and `read`, and stores `delivered_at`, `read_at`, `last_status_at`, and `status_source` without regressing retry/resume safety
+- dashboard recipient aggregates now expose durable `delivered` and `read` counts in addition to sent/failed/pending totals
 - dashboard metrics now use stored tenant data for `contacts_total`, `broadcast_total`, and `messages_total`
 - dashboard metrics now also expose broadcast recipient totals, attempted, sent, failed, pending, and a partial flag for older untracked jobs
 - dashboard runtime metrics now expose `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
@@ -135,7 +138,8 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - replayed media payloads do not imply durable SaaS media storage; backfill currently persists metadata and structured message bodies only
 - some large multi-package `go test` runs can still hit Windows linker memory limits in this environment, so targeted package verification is more reliable than one giant test invocation
 - repo-wide `go test ./...` is still blocked by legacy `github.com/chai2010/webp` build failures outside the SaaS sprint slice
-- broadcast recipient detail still does not join enriched CRM display names, and it does not yet update per-recipient state from post-send delivery receipts
+- broadcast recipient detail still does not join enriched CRM display names
+- richer receipt progression is still best-effort and runtime-dependent; recipients remain at `sent` when later receipt events are absent or cannot be safely matched
 
 ## Files changed in this wave
 

@@ -31,8 +31,11 @@
 - Added richer broadcast execution logs for job claiming, per-job processing, and per-recipient send attempts/failures
 - Hardened broadcast success semantics so a job is not treated as delivered unless the instance send path returns a confirmed send result
 - Added `GET /broadcast/:id/recipients` for tenant-safe paginated recipient progress inspection on large broadcasts
-- Added bounded recipient filters for `pending`, `sent`, and `failed`, plus optional phone/contact search against durable recipient progress
+- Added bounded recipient filters for `pending`, `sent`, `delivered`, `read`, and `failed`, plus optional phone/contact search against durable recipient progress
 - Added whole-broadcast recipient summary counts alongside paginated recipient rows so operator detail views can stay truthful without loading every recipient at once
+- Added best-effort recipient-level `delivered` and `read` progression for broadcasts when runtime receipt events can be safely matched back by durable `instance_id + message_id`
+- Added durable recipient receipt metadata fields including `delivered_at`, `read_at`, `last_status_at`, and `status_source`
+- Extended broadcast and dashboard recipient analytics so `sent` remains inclusive of later receipt states while `delivered` and `read` are also exposed separately
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
 - Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
 - Normalized bridge-unavailable lifecycle failures so reconnect, pair, and logout now return conflict-style operator errors instead of generic internal errors
@@ -107,7 +110,7 @@
 - Durable runtime status/history reads no longer require the live bridge, but live snapshots and connection actions still do
 - Replay/backfill improves inbound message completeness, but it still cannot reconstruct a full older connection/logout timeline from the bridge alone
 - Historical broadcasts created before recipient tracking may still report partial recipient analytics until they are re-run or backfilled
-- Broadcast recipient detail still reflects stored send-attempt progress only; post-send delivery receipt state is not yet projected back into recipient rows
+- Broadcast receipt progression remains runtime-dependent and best-effort; recipients stay at `sent` when later receipt events are not observed or cannot be safely matched
 - Repo-root temp utilities now use `//go:build ignore`, removing them as `go test ./...` blockers
 - Repo-wide tests are still partially blocked by legacy `github.com/chai2010/webp` build failures outside the SaaS API sprint slice
 

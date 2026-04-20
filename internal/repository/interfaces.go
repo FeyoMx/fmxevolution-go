@@ -78,6 +78,7 @@ type BroadcastRepository interface {
 	SaveRecipientProgress(ctx context.Context, progress *BroadcastRecipientProgress) error
 	ListRecipientProgress(ctx context.Context, tenantID, jobID string) ([]BroadcastRecipientProgress, error)
 	ListRecipientProgressPage(ctx context.Context, tenantID, jobID string, filter BroadcastRecipientProgressFilter) ([]BroadcastRecipientProgress, int64, error)
+	MarkRecipientReceipt(ctx context.Context, tenantID, instanceID, messageID, state string, at time.Time) (bool, error)
 	SummarizeRecipientProgress(ctx context.Context, tenantID, jobID string) (BroadcastRecipientAnalytics, error)
 	SummarizeRecipientProgressByTenant(ctx context.Context, tenantID string) (BroadcastRecipientAnalytics, error)
 	ClaimNext(ctx context.Context, workerID string, limit int, now time.Time) ([]BroadcastJob, error)

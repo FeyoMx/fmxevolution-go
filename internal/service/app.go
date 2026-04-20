@@ -78,6 +78,7 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 		cfg.Broadcast.Workers,
 		cfg.Broadcast.QueueBatchSize,
 	)
+	registerBroadcastReceiptCallbacks(app.Broadcast, logger)
 
 	return app
 }
@@ -264,6 +265,21 @@ func registerConversationCallbacks(stores *repository.Stores, logger *slog.Logge
 		}
 		if err := stores.RuntimeObservability.AppendEvent(ctx, record); err != nil && logger != nil {
 			logger.Warn("persist runtime observability event failed", "instance_id", event.InstanceID, "event_type", event.EventType, "error", err)
+		}
+	})
+}
+
+func registerBroadcastReceiptCallbacks(service *broadcast.Service, logger *slog.Logger) {
+	if service == nil {
+		return
+	}
+
+	sendstatus.RegisterReceiptListener(func(update sendstatus.ReceiptUpdate) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := service.HandleReceipt(ctx, update.InstanceID, update.MessageID, update.State, update.At); err != nil && logger != nil {
+			logger.Warn("persist receipt to broadcast progress failed", "instance_id", update.InstanceID, "message_id", update.MessageID, "state", update.State, "error", err)
 		}
 	})
 }

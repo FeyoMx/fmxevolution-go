@@ -163,6 +163,13 @@ func (m *broadcastRepoMock) SummarizeRecipientProgress(_ context.Context, tenant
 		switch progress.DeliveryStatus {
 		case recipientStatusSent:
 			summary.Sent++
+		case recipientStatusDelivered:
+			summary.Sent++
+			summary.Delivered++
+		case recipientStatusRead:
+			summary.Sent++
+			summary.Delivered++
+			summary.Read++
 		case recipientStatusFailed:
 			summary.Failed++
 		default:
@@ -191,6 +198,13 @@ func (m *broadcastRepoMock) SummarizeRecipientProgressByTenant(_ context.Context
 			switch progress.DeliveryStatus {
 			case recipientStatusSent:
 				summary.Sent++
+			case recipientStatusDelivered:
+				summary.Sent++
+				summary.Delivered++
+			case recipientStatusRead:
+				summary.Sent++
+				summary.Delivered++
+				summary.Read++
 			case recipientStatusFailed:
 				summary.Failed++
 			default:
@@ -202,6 +216,35 @@ func (m *broadcastRepoMock) SummarizeRecipientProgressByTenant(_ context.Context
 		}
 	}
 	return summary, nil
+}
+
+func (m *broadcastRepoMock) MarkRecipientReceipt(_ context.Context, tenantID, instanceID, messageID, state string, at time.Time) (bool, error) {
+	state = strings.ToLower(strings.TrimSpace(state))
+	for _, byPhone := range m.recipientProgress {
+		for _, progress := range byPhone {
+			if progress.TenantID != tenantID || progress.InstanceID != instanceID || strings.TrimSpace(progress.MessageID) != strings.TrimSpace(messageID) {
+				continue
+			}
+			timestamp := at.UTC()
+			switch state {
+			case "delivered":
+				progress.DeliveryStatus = recipientStatusDelivered
+				progress.DeliveredAt = &timestamp
+				progress.LastStatusAt = &timestamp
+				progress.StatusSource = "receipt_delivered"
+			case "read":
+				progress.DeliveryStatus = recipientStatusRead
+				progress.DeliveredAt = &timestamp
+				progress.ReadAt = &timestamp
+				progress.LastStatusAt = &timestamp
+				progress.StatusSource = "receipt_read"
+			default:
+				return false, nil
+			}
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *broadcastRepoMock) ClaimNext(_ context.Context, workerID string, _ int, _ time.Time) ([]repository.BroadcastJob, error) {
@@ -398,12 +441,50 @@ func TestListRecipientsRejectsUnsupportedStatusFilter(t *testing.T) {
 	job := &repository.BroadcastJob{ID: "job-invalid", TenantID: "tenant-1", InstanceID: "instance-1", Status: statusQueued}
 	repo.jobs[job.ID] = job
 
-	_, err := service.ListRecipients(context.Background(), "tenant-1", job.ID, ListRecipientsInput{Status: "delivered"})
+	_, err := service.ListRecipients(context.Background(), "tenant-1", job.ID, ListRecipientsInput{Status: "accepted"})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
+func TestHandleReceiptUpdatesRecipientDeliveryProgress(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
+	job := &repository.BroadcastJob{ID: "job-receipt", TenantID: "tenant-1", InstanceID: "instance-1", Status: statusCompleted}
+	repo.jobs[job.ID] = job
+
+	_ = repo.SeedRecipientProgress(context.Background(), []repository.BroadcastRecipientProgress{
+		{
+			BroadcastID:    job.ID,
+			TenantID:       "tenant-1",
+			InstanceID:     "instance-1",
+			Phone:          "521111111111",
+			DeliveryStatus: recipientStatusSent,
+			AttemptCount:   1,
+			MessageID:      "msg-1",
+		},
+	})
+
+	deliveredAt := time.Now().UTC()
+	if err := service.HandleReceipt(context.Background(), "instance-1", "msg-1", "delivered", deliveredAt); err != nil {
+		t.Fatalf("handle delivered receipt: %v", err)
+	}
+	if err := service.HandleReceipt(context.Background(), "instance-1", "msg-1", "read", deliveredAt.Add(time.Minute)); err != nil {
+		t.Fatalf("handle read receipt: %v", err)
+	}
+
+	progress, _ := repo.ListRecipientProgress(context.Background(), "tenant-1", job.ID)
+	if len(progress) != 1 {
+		t.Fatalf("expected 1 recipient progress row, got %d", len(progress))
+	}
+	if progress[0].DeliveryStatus != recipientStatusRead || progress[0].DeliveredAt == nil || progress[0].ReadAt == nil {
+		t.Fatalf("expected read progression to be stored, got %+v", progress[0])
+	}
+	if progress[0].StatusSource != "receipt_read" || progress[0].LastStatusAt == nil {
+		t.Fatalf("expected receipt metadata to be stored, got %+v", progress[0])
 	}
 }
 
@@ -565,7 +646,7 @@ func TestDeliveryProcessorDoesNotTreatEmptySendResultAsSuccess(t *testing.T) {
 func TestDeliveryProcessorResumeSkipsAlreadySentRecipients(t *testing.T) {
 	repo := newBroadcastRepoMock()
 	_ = repo.SeedRecipientProgress(context.Background(), []repository.BroadcastRecipientProgress{
-		{BroadcastID: "job-1", TenantID: "tenant-1", InstanceID: "instance-1", Phone: "521111111111", DeliveryStatus: recipientStatusSent, AttemptCount: 1},
+		{BroadcastID: "job-1", TenantID: "tenant-1", InstanceID: "instance-1", Phone: "521111111111", DeliveryStatus: recipientStatusRead, AttemptCount: 1},
 		{BroadcastID: "job-1", TenantID: "tenant-1", InstanceID: "instance-1", Phone: "522222222222", DeliveryStatus: recipientStatusPending},
 	})
 	sender := &senderMock{}
@@ -581,7 +662,7 @@ func TestDeliveryProcessorResumeSkipsAlreadySentRecipients(t *testing.T) {
 		t.Fatalf("process: %v", err)
 	}
 	if len(sender.calls) != 1 || sender.calls[0].Number != "522222222222" {
-		t.Fatalf("expected resume to skip sent recipient, got %+v", sender.calls)
+		t.Fatalf("expected resume to skip terminal recipient states, got %+v", sender.calls)
 	}
 }
 

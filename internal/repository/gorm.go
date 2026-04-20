@@ -582,7 +582,11 @@ func (r *gormBroadcastRepository) SaveRecipientProgress(ctx context.Context, pro
 			"last_error",
 			"last_attempt_at",
 			"sent_at",
+			"delivered_at",
+			"read_at",
 			"failed_at",
+			"last_status_at",
+			"status_source",
 			"message_id",
 			"server_id",
 			"chat_jid",
@@ -643,6 +647,46 @@ func (r *gormBroadcastRepository) ListRecipientProgressPage(ctx context.Context,
 	return progress, total, nil
 }
 
+func (r *gormBroadcastRepository) MarkRecipientReceipt(ctx context.Context, tenantID, instanceID, messageID, state string, at time.Time) (bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	instanceID = strings.TrimSpace(instanceID)
+	messageID = strings.TrimSpace(messageID)
+	state = strings.ToLower(strings.TrimSpace(state))
+	if tenantID == "" || instanceID == "" || messageID == "" {
+		return false, nil
+	}
+
+	timestamp := at.UTC()
+	updates := map[string]any{
+		"updated_at":     time.Now().UTC(),
+		"last_status_at": &timestamp,
+	}
+	query := r.db.WithContext(ctx).
+		Model(&BroadcastRecipientProgress{}).
+		Where("tenant_id = ? AND instance_id = ? AND message_id = ? AND delivery_status <> ?", tenantID, instanceID, messageID, "failed")
+
+	switch state {
+	case "delivered":
+		updates["delivery_status"] = "delivered"
+		updates["delivered_at"] = gorm.Expr("COALESCE(delivered_at, ?)", timestamp)
+		updates["status_source"] = "receipt_delivered"
+		query = query.Where("delivery_status <> ?", "read")
+	case "read":
+		updates["delivery_status"] = "read"
+		updates["delivered_at"] = gorm.Expr("COALESCE(delivered_at, ?)", timestamp)
+		updates["read_at"] = gorm.Expr("CASE WHEN read_at IS NULL OR read_at < ? THEN ? ELSE read_at END", timestamp, timestamp)
+		updates["status_source"] = "receipt_read"
+	default:
+		return false, nil
+	}
+
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
 func (r *gormBroadcastRepository) SummarizeRecipientProgress(ctx context.Context, tenantID, jobID string) (BroadcastRecipientAnalytics, error) {
 	var summary BroadcastRecipientAnalytics
 	err := r.db.WithContext(ctx).
@@ -650,7 +694,9 @@ func (r *gormBroadcastRepository) SummarizeRecipientProgress(ctx context.Context
 		Select(`
 			COUNT(*) AS total_recipients,
 			COALESCE(SUM(CASE WHEN attempt_count > 0 THEN 1 ELSE 0 END), 0) AS attempted,
-			COALESCE(SUM(CASE WHEN delivery_status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+			COALESCE(SUM(CASE WHEN delivery_status IN ('sent', 'delivered', 'read') THEN 1 ELSE 0 END), 0) AS sent,
+			COALESCE(SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS delivered,
+			COALESCE(SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS read,
 			COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
 			COALESCE(SUM(CASE WHEN delivery_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending
 		`).
@@ -667,7 +713,9 @@ func (r *gormBroadcastRepository) SummarizeRecipientProgressByTenant(ctx context
 			COUNT(DISTINCT broadcast_id) AS tracked_broadcasts,
 			COUNT(*) AS total_recipients,
 			COALESCE(SUM(CASE WHEN attempt_count > 0 THEN 1 ELSE 0 END), 0) AS attempted,
-			COALESCE(SUM(CASE WHEN delivery_status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+			COALESCE(SUM(CASE WHEN delivery_status IN ('sent', 'delivered', 'read') THEN 1 ELSE 0 END), 0) AS sent,
+			COALESCE(SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS delivered,
+			COALESCE(SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS read,
 			COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
 			COALESCE(SUM(CASE WHEN delivery_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending
 		`).

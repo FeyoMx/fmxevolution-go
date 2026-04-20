@@ -168,6 +168,8 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		recipient.LastError = ""
 		recipient.SentAt = &sentAt
 		recipient.FailedAt = nil
+		recipient.LastStatusAt = &sentAt
+		recipient.StatusSource = "send_result"
 		recipient.MessageID = strings.TrimSpace(result.MessageID)
 		recipient.ServerID = result.ServerID
 		recipient.ChatJID = strings.TrimSpace(result.Chat)
@@ -298,7 +300,7 @@ func pendingRecipientProgress(progress []repository.BroadcastRecipientProgress) 
 	pending := make([]repository.BroadcastRecipientProgress, 0, len(progress))
 	for _, item := range progress {
 		switch strings.ToLower(strings.TrimSpace(item.DeliveryStatus)) {
-		case recipientStatusSent, recipientStatusFailed:
+		case recipientStatusSent, recipientStatusDelivered, recipientStatusRead, recipientStatusFailed:
 			continue
 		default:
 			pending = append(pending, item)

@@ -73,6 +73,8 @@ func TestMetricsUsesRealStoredCountsAndRuntimeHealth(t *testing.T) {
 					TotalRecipients:   10,
 					Attempted:         8,
 					Sent:              6,
+					Delivered:         4,
+					Read:              2,
 					Failed:            1,
 					Pending:           3,
 				},
@@ -101,7 +103,7 @@ func TestMetricsUsesRealStoredCountsAndRuntimeHealth(t *testing.T) {
 	if snapshot.BroadcastTotal != 3 {
 		t.Fatalf("expected broadcast total 3, got %d", snapshot.BroadcastTotal)
 	}
-	if snapshot.BroadcastRecipients.TotalRecipients != 10 || snapshot.BroadcastRecipients.Sent != 6 {
+	if snapshot.BroadcastRecipients.TotalRecipients != 10 || snapshot.BroadcastRecipients.Sent != 6 || snapshot.BroadcastRecipients.Delivered != 4 || snapshot.BroadcastRecipients.Read != 2 {
 		t.Fatalf("unexpected broadcast recipient analytics: %+v", snapshot.BroadcastRecipients)
 	}
 	if !snapshot.BroadcastRecipients.Partial {

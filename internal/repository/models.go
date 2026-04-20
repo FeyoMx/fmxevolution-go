@@ -229,7 +229,11 @@ type BroadcastRecipientProgress struct {
 	LastError      string     `json:"last_error,omitempty" gorm:"type:text"`
 	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
 	SentAt         *time.Time `json:"sent_at,omitempty"`
+	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	ReadAt         *time.Time `json:"read_at,omitempty"`
 	FailedAt       *time.Time `json:"failed_at,omitempty"`
+	LastStatusAt   *time.Time `json:"last_status_at,omitempty"`
+	StatusSource   string     `json:"status_source,omitempty" gorm:"size:50"`
 	MessageID      string     `json:"message_id,omitempty" gorm:"size:255"`
 	ServerID       int64      `json:"server_id,omitempty"`
 	ChatJID        string     `json:"chat_jid,omitempty" gorm:"size:255"`
@@ -242,6 +246,8 @@ type BroadcastRecipientAnalytics struct {
 	TotalRecipients   int64 `json:"total_recipients" gorm:"-"`
 	Attempted         int64 `json:"attempted" gorm:"-"`
 	Sent              int64 `json:"sent" gorm:"-"`
+	Delivered         int64 `json:"delivered" gorm:"-"`
+	Read              int64 `json:"read" gorm:"-"`
 	Failed            int64 `json:"failed" gorm:"-"`
 	Pending           int64 `json:"pending" gorm:"-"`
 	Partial           bool  `json:"partial,omitempty" gorm:"-"`
