@@ -67,6 +67,46 @@ type CreateInput struct {
 	ScheduledAt *time.Time `json:"scheduled_at"`
 }
 
+type ListRecipientsInput struct {
+	Page   int
+	Limit  int
+	Status string
+	Query  string
+}
+
+type RecipientListResult struct {
+	BroadcastID string                                 `json:"broadcast_id"`
+	Page        int                                    `json:"page"`
+	Limit       int                                    `json:"limit"`
+	Total       int64                                  `json:"total"`
+	TotalPages  int                                    `json:"total_pages"`
+	Filters     RecipientListFilters                   `json:"filters"`
+	Summary     repository.BroadcastRecipientAnalytics `json:"summary"`
+	Partial     bool                                   `json:"partial"`
+	Items       []RecipientListItem                    `json:"items"`
+}
+
+type RecipientListFilters struct {
+	Status string `json:"status,omitempty"`
+	Query  string `json:"query,omitempty"`
+}
+
+type RecipientListItem struct {
+	ID             string     `json:"id"`
+	BroadcastID    string     `json:"broadcast_id"`
+	ContactID      *string    `json:"contact_id,omitempty"`
+	Phone          string     `json:"phone"`
+	DeliveryStatus string     `json:"delivery_status"`
+	AttemptCount   int        `json:"attempt_count"`
+	LastError      string     `json:"last_error,omitempty"`
+	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
+	SentAt         *time.Time `json:"sent_at,omitempty"`
+	FailedAt       *time.Time `json:"failed_at,omitempty"`
+	MessageID      string     `json:"message_id,omitempty"`
+	ServerID       int64      `json:"server_id,omitempty"`
+	ChatJID        string     `json:"chat_jid,omitempty"`
+}
+
 func NewService(repo repository.BroadcastRepository, instances instanceFinder, contacts contactLister, sender textSender, logger *slog.Logger, workers, claimBatchSize int) *Service {
 	if logger == nil {
 		logger = slog.Default()
@@ -199,6 +239,62 @@ func (s *Service) List(ctx context.Context, tenantID string, limit int) ([]repos
 		}
 	}
 	return jobs, nil
+}
+
+func (s *Service) ListRecipients(ctx context.Context, tenantID, jobID string, input ListRecipientsInput) (*RecipientListResult, error) {
+	if _, err := s.repo.GetByID(ctx, tenantID, jobID); err != nil {
+		return nil, fmt.Errorf("%w: broadcast job not found", domain.ErrNotFound)
+	}
+
+	filter, err := normalizeRecipientListFilter(input)
+	if err != nil {
+		return nil, err
+	}
+
+	items, total, err := s.repo.ListRecipientProgressPage(ctx, tenantID, jobID, filter)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := s.repo.SummarizeRecipientProgress(ctx, tenantID, jobID)
+	if err != nil {
+		return nil, err
+	}
+	summary.Partial = summary.TotalRecipients == 0
+
+	result := &RecipientListResult{
+		BroadcastID: jobID,
+		Page:        filter.Page,
+		Limit:       filter.Limit,
+		Total:       total,
+		TotalPages:  totalPages(total, filter.Limit),
+		Filters: RecipientListFilters{
+			Status: filter.Status,
+			Query:  filter.Query,
+		},
+		Summary: summary,
+		Partial: summary.Partial,
+		Items:   make([]RecipientListItem, 0, len(items)),
+	}
+
+	for _, item := range items {
+		result.Items = append(result.Items, RecipientListItem{
+			ID:             item.ID,
+			BroadcastID:    item.BroadcastID,
+			ContactID:      item.ContactID,
+			Phone:          item.Phone,
+			DeliveryStatus: item.DeliveryStatus,
+			AttemptCount:   item.AttemptCount,
+			LastError:      item.LastError,
+			LastAttemptAt:  item.LastAttemptAt,
+			SentAt:         item.SentAt,
+			FailedAt:       item.FailedAt,
+			MessageID:      item.MessageID,
+			ServerID:       item.ServerID,
+			ChatJID:        item.ChatJID,
+		})
+	}
+
+	return result, nil
 }
 
 func (s *Service) dispatcher(ctx context.Context) {
@@ -477,4 +573,47 @@ func backoffForAttempt(attempt int) time.Duration {
 		return 1 * time.Minute
 	}
 	return 5 * time.Minute
+}
+
+func normalizeRecipientListFilter(input ListRecipientsInput) (repository.BroadcastRecipientProgressFilter, error) {
+	filter := repository.BroadcastRecipientProgressFilter{
+		Page:  input.Page,
+		Limit: input.Limit,
+	}
+
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Limit > 200 {
+		filter.Limit = 200
+	}
+
+	status := strings.ToLower(strings.TrimSpace(input.Status))
+	switch status {
+	case "", recipientStatusPending, recipientStatusSent, recipientStatusFailed:
+		filter.Status = status
+	default:
+		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: unsupported recipient status filter", domain.ErrValidation)
+	}
+
+	filter.Query = strings.TrimSpace(input.Query)
+	if len(filter.Query) > 100 {
+		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: query cannot exceed 100 characters", domain.ErrValidation)
+	}
+
+	return filter, nil
+}
+
+func totalPages(total int64, limit int) int {
+	if total == 0 || limit <= 0 {
+		return 0
+	}
+	pages := int(total / int64(limit))
+	if total%int64(limit) != 0 {
+		pages++
+	}
+	return pages
 }

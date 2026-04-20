@@ -77,12 +77,20 @@ type BroadcastRepository interface {
 	SeedRecipientProgress(ctx context.Context, records []BroadcastRecipientProgress) error
 	SaveRecipientProgress(ctx context.Context, progress *BroadcastRecipientProgress) error
 	ListRecipientProgress(ctx context.Context, tenantID, jobID string) ([]BroadcastRecipientProgress, error)
+	ListRecipientProgressPage(ctx context.Context, tenantID, jobID string, filter BroadcastRecipientProgressFilter) ([]BroadcastRecipientProgress, int64, error)
 	SummarizeRecipientProgress(ctx context.Context, tenantID, jobID string) (BroadcastRecipientAnalytics, error)
 	SummarizeRecipientProgressByTenant(ctx context.Context, tenantID string) (BroadcastRecipientAnalytics, error)
 	ClaimNext(ctx context.Context, workerID string, limit int, now time.Time) ([]BroadcastJob, error)
 	MarkCompleted(ctx context.Context, tenantID, jobID string, completedAt time.Time) error
 	MarkCompletedWithFailures(ctx context.Context, tenantID, jobID, message string, completedAt time.Time) error
 	MarkFailed(ctx context.Context, tenantID, jobID, message string, failedAt time.Time, retryAt *time.Time) error
+}
+
+type BroadcastRecipientProgressFilter struct {
+	Status string
+	Query  string
+	Page   int
+	Limit  int
 }
 
 type WebhookRepository interface {

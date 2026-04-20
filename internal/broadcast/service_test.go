@@ -3,9 +3,11 @@ package broadcast
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/instance"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 )
@@ -104,6 +106,48 @@ func (m *broadcastRepoMock) ListRecipientProgress(_ context.Context, tenantID, j
 		items = append(items, *progress)
 	}
 	return items, nil
+}
+
+func (m *broadcastRepoMock) ListRecipientProgressPage(_ context.Context, tenantID, jobID string, filter repository.BroadcastRecipientProgressFilter) ([]repository.BroadcastRecipientProgress, int64, error) {
+	items := make([]repository.BroadcastRecipientProgress, 0)
+	for _, progress := range m.recipientProgress[jobID] {
+		if progress.TenantID != tenantID {
+			continue
+		}
+		if filter.Status != "" && progress.DeliveryStatus != filter.Status {
+			continue
+		}
+		if filter.Query != "" {
+			query := strings.ToLower(strings.TrimSpace(filter.Query))
+			contactID := ""
+			if progress.ContactID != nil {
+				contactID = strings.ToLower(strings.TrimSpace(*progress.ContactID))
+			}
+			if !strings.Contains(strings.ToLower(progress.Phone), query) && !strings.Contains(contactID, query) {
+				continue
+			}
+		}
+		items = append(items, *progress)
+	}
+
+	total := int64(len(items))
+	page := filter.Page
+	if page <= 0 {
+		page = 1
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	start := (page - 1) * limit
+	if start >= len(items) {
+		return []repository.BroadcastRecipientProgress{}, total, nil
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end], total, nil
 }
 
 func (m *broadcastRepoMock) SummarizeRecipientProgress(_ context.Context, tenantID, jobID string) (repository.BroadcastRecipientAnalytics, error) {
@@ -315,6 +359,51 @@ func TestCreateBroadcastJobEnrichesRecipientAnalytics(t *testing.T) {
 	}
 	if enriched.RecipientSent != 1 || enriched.RecipientPending != 1 || len(enriched.Recipients) != 2 {
 		t.Fatalf("unexpected recipient analytics: %+v", enriched)
+	}
+}
+
+func TestListRecipientsReturnsPaginatedFilteredItems(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
+
+	job := &repository.BroadcastJob{ID: "job-list", TenantID: "tenant-1", InstanceID: "instance-1", Status: statusQueued}
+	repo.jobs[job.ID] = job
+	contactID := "contact-1"
+	_ = repo.SeedRecipientProgress(context.Background(), []repository.BroadcastRecipientProgress{
+		{BroadcastID: job.ID, TenantID: "tenant-1", InstanceID: "instance-1", ContactID: &contactID, Phone: "521111111111", DeliveryStatus: recipientStatusPending},
+		{BroadcastID: job.ID, TenantID: "tenant-1", InstanceID: "instance-1", Phone: "522222222222", DeliveryStatus: recipientStatusSent, AttemptCount: 1},
+		{BroadcastID: job.ID, TenantID: "tenant-1", InstanceID: "instance-1", Phone: "523333333333", DeliveryStatus: recipientStatusFailed, AttemptCount: 1, LastError: "bad number"},
+	})
+
+	result, err := service.ListRecipients(context.Background(), "tenant-1", job.ID, ListRecipientsInput{
+		Page:   1,
+		Limit:  1,
+		Status: recipientStatusSent,
+		Query:  "2222",
+	})
+	if err != nil {
+		t.Fatalf("list recipients: %v", err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("unexpected paginated result: %+v", result)
+	}
+	if result.Items[0].Phone != "522222222222" || result.Summary.TotalRecipients != 3 {
+		t.Fatalf("unexpected recipient payload: %+v", result)
+	}
+}
+
+func TestListRecipientsRejectsUnsupportedStatusFilter(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
+	job := &repository.BroadcastJob{ID: "job-invalid", TenantID: "tenant-1", InstanceID: "instance-1", Status: statusQueued}
+	repo.jobs[job.ID] = job
+
+	_, err := service.ListRecipients(context.Background(), "tenant-1", job.ID, ListRecipientsInput{Status: "delivered"})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }
 

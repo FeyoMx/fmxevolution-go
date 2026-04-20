@@ -107,6 +107,9 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - broadcast jobs can now finish as `completed_with_failures` when all recipients are terminal but some failed permanently
 - broadcast processing logs now include claim, per-job, and per-recipient attempt/failure details with attempt counters
 - broadcast success now requires a confirmed send result from the instance send path instead of treating an empty result as delivered
+- broadcast detail now has a dedicated tenant-safe `GET /broadcast/:id/recipients` endpoint with bounded pagination, status filters, and optional phone/contact search
+- recipient progress listing returns whole-broadcast durable summary counts plus paginated operator-facing recipient rows for large campaign inspection
+- recipient detail remains truthful by exposing only durable progress states (`pending`, `sent`, `failed`) and by marking old pre-progress broadcasts as partial when needed
 - dashboard metrics now use stored tenant data for `contacts_total`, `broadcast_total`, and `messages_total`
 - dashboard metrics now also expose broadcast recipient totals, attempted, sent, failed, pending, and a partial flag for older untracked jobs
 - dashboard runtime metrics now expose `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
@@ -132,6 +135,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - replayed media payloads do not imply durable SaaS media storage; backfill currently persists metadata and structured message bodies only
 - some large multi-package `go test` runs can still hit Windows linker memory limits in this environment, so targeted package verification is more reliable than one giant test invocation
 - repo-wide `go test ./...` is still blocked by legacy `github.com/chai2010/webp` build failures outside the SaaS sprint slice
+- broadcast recipient detail still does not join enriched CRM display names, and it does not yet update per-recipient state from post-send delivery receipts
 
 ## Files changed in this wave
 

@@ -194,6 +194,7 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 		protected.GET("/broadcast", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastHandler.List)
 		protected.POST("/broadcast", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastLimiter.Middleware(), broadcastHandler.Create)
 		protected.GET("/broadcast/:id", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastHandler.Get)
+		protected.GET("/broadcast/:id/recipients", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastHandler.ListRecipients)
 		protected.GET("/webhook", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), webhookHandler.List)
 		protected.POST("/webhook", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin), webhookHandler.Create)
 		protected.GET("/webhook/:id", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), webhookHandler.Get)

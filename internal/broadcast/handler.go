@@ -59,3 +59,30 @@ func (h *Handler) Get(c *gin.Context) {
 	}
 	sharedhandler.WriteJSON(c, http.StatusOK, job)
 }
+
+func (h *Handler) ListRecipients(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		sharedhandler.WriteValidationError(c, "query inválida para recipients de broadcast", err)
+		return
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if err != nil {
+		sharedhandler.WriteValidationError(c, "query inválida para recipients de broadcast", err)
+		return
+	}
+
+	result, err := h.service.ListRecipients(c.Request.Context(), identity.TenantID, c.Param("id"), ListRecipientsInput{
+		Page:   page,
+		Limit:  limit,
+		Status: c.Query("status"),
+		Query:  c.Query("query"),
+	})
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+	sharedhandler.WriteJSON(c, http.StatusOK, result)
+}

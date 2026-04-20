@@ -209,6 +209,7 @@ Implemented routes:
 - `GET /broadcast`
 - `POST /broadcast`
 - `GET /broadcast/:id`
+- `GET /broadcast/:id/recipients`
 
 Readiness notes:
 
@@ -221,6 +222,9 @@ Readiness notes:
 - Retryable failures now resume safely from pending recipients without duplicating recipients already marked `sent`.
 - Permanent recipient failures are tracked per recipient and surfaced in job analytics.
 - Broadcast jobs can now finish as `completed_with_failures` when the audience is fully processed but some recipients are terminal failures.
+- Broadcast detail is now operator-friendly for larger campaigns because recipient progress can be paginated and filtered by `pending`, `sent`, and `failed`.
+- Recipient listing returns durable operator-facing fields such as phone, `contact_id`, attempt count, last error, timestamps, and send references when available.
+- Broadcast recipient listing stays truthful: it exposes only stored recipient progress and whole-broadcast durable summary counts, without inventing downstream delivery receipt states.
 
 ### Webhooks
 
@@ -352,6 +356,7 @@ These capabilities are still missing from the active SaaS surface even though th
 - tenant-safe CRUD for OpenAI, Typebot, Dify, N8N, EvoAI, EvolutionBot, and Flowise
 - full upstream chat-history replay/backfill parity
 - old historical broadcasts created before recipient progress tracking may still show partial recipient analytics
+- broadcast recipient detail is still operational rather than forensic: there is no post-send delivery receipt update loop yet
 - full product analytics beyond tenant-scoped operational counts
 
 ## Known Technical Debt
@@ -369,6 +374,6 @@ These capabilities are still missing from the active SaaS surface even though th
 
 1. Add operator-safe throttling or caching around live chat-list queries so bridge rate limits do not degrade MVP UX.
 2. Tighten targeted integration tests around auth, runtime actions, message search, and backfill envelopes.
-3. Add operator-facing broadcast filters and pagination over recipient progress so large campaigns remain easy to inspect.
+3. Wire recipient progress to post-send delivery receipts so operators can distinguish accepted sends from delivered/read states where the runtime truly emits them.
 4. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.
 5. Decide which manager integration suites are true product priorities and keep the rest explicitly unsupported.

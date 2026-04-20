@@ -600,6 +600,49 @@ func (r *gormBroadcastRepository) ListRecipientProgress(ctx context.Context, ten
 	return progress, err
 }
 
+func (r *gormBroadcastRepository) ListRecipientProgressPage(ctx context.Context, tenantID, jobID string, filter BroadcastRecipientProgressFilter) ([]BroadcastRecipientProgress, int64, error) {
+	var (
+		progress []BroadcastRecipientProgress
+		total    int64
+	)
+
+	query := r.db.WithContext(ctx).
+		Model(&BroadcastRecipientProgress{}).
+		Where("tenant_id = ? AND broadcast_id = ?", tenantID, jobID)
+
+	if strings.TrimSpace(filter.Status) != "" {
+		query = query.Where("delivery_status = ?", strings.TrimSpace(filter.Status))
+	}
+	if strings.TrimSpace(filter.Query) != "" {
+		like := "%" + strings.TrimSpace(filter.Query) + "%"
+		query = query.Where("phone ILIKE ? OR CAST(contact_id AS text) ILIKE ?", like, like)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	page := filter.Page
+	if page <= 0 {
+		page = 1
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	err := query.
+		Order("created_at ASC, phone ASC").
+		Limit(limit).
+		Offset((page - 1) * limit).
+		Find(&progress).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return progress, total, nil
+}
+
 func (r *gormBroadcastRepository) SummarizeRecipientProgress(ctx context.Context, tenantID, jobID string) (BroadcastRecipientAnalytics, error) {
 	var summary BroadcastRecipientAnalytics
 	err := r.db.WithContext(ctx).

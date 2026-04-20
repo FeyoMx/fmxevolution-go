@@ -397,11 +397,13 @@ Validation notes:
 | `GET` | `/broadcast` | owner, admin, agent | query `limit?` | `[]BroadcastJob` | tenant-only listing |
 | `POST` | `/broadcast` | owner, admin, agent | `{ instance_id, message, rate_per_hour?, delay_sec?, max_attempts?, scheduled_at? }` | created `BroadcastJob` | target instance must belong to current tenant |
 | `GET` | `/broadcast/:id` | owner, admin, agent | none | `BroadcastJob` | current tenant only |
+| `GET` | `/broadcast/:id/recipients` | owner, admin, agent | query `page?`, `limit?`, `status?`, `query?` | paginated recipient progress payload | current tenant only |
 
 Rate limiting:
 
 - `POST /broadcast` is wrapped by the broadcast limiter
 - `GET /broadcast` clamps `limit` to a safe range of `1..200`
+- `GET /broadcast/:id/recipients` defaults to `page=1` and `limit=50`, clamps `limit` to `1..200`, and rejects unsupported `status` values
 - `POST /broadcast` rejects negative `delay_sec`, `rate_per_hour`, and `max_attempts`
 - `POST /broadcast` rejects `scheduled_at` values that are already in the past
 
@@ -429,10 +431,62 @@ Recipient progress on `BroadcastJob` detail:
 - `recipient_analytics`
 - `recipients`
 
+Recipient progress listing response on `GET /broadcast/:id/recipients`:
+
+```json
+{
+  "broadcast_id": "job-uuid",
+  "page": 1,
+  "limit": 50,
+  "total": 1324,
+  "total_pages": 27,
+  "filters": {
+    "status": "failed",
+    "query": "52155"
+  },
+  "summary": {
+    "total_recipients": 1324,
+    "attempted": 1300,
+    "sent": 1201,
+    "failed": 99,
+    "pending": 24,
+    "partial": false
+  },
+  "partial": false,
+  "items": [
+    {
+      "id": "progress-uuid",
+      "broadcast_id": "job-uuid",
+      "contact_id": "contact-uuid",
+      "phone": "5215512345678",
+      "delivery_status": "failed",
+      "attempt_count": 2,
+      "last_error": "validation failed: bad number",
+      "last_attempt_at": "2026-04-19T18:20:10Z",
+      "failed_at": "2026-04-19T18:20:10Z",
+      "message_id": "",
+      "server_id": 0,
+      "chat_jid": ""
+    }
+  ]
+}
+```
+
+Recipient listing notes:
+
+- `status` currently supports only `pending`, `sent`, and `failed`
+- `query` is optional and currently searches durable recipient `phone` plus `contact_id` text when present
+- the endpoint returns only durable recipient progress already stored for that tenant-scoped broadcast
+- `summary` reflects whole-broadcast durable recipient analytics, not just the current page
+- `partial` is `true` only when the broadcast has no durable recipient progress snapshot, which can happen on historical jobs created before recipient tracking existed
+- no receipt or post-send delivery state is invented here; `delivery_status` is limited to the stored recipient progress state
+
 Current limitation:
 
 - broadcast execution is text-only and currently targets CRM contacts, not arbitrary imported lists
 - historical jobs created before recipient progress was introduced may report `recipient_partial: true` until they are re-run or otherwise seeded with recipient progress
+- recipient detail currently exposes stored phone and `contact_id`, but not an enriched contact-name join
+- recipient detail does not yet update from post-send delivery receipts, so `sent` means the send path returned a confirmed send result, not a later WhatsApp delivery/read receipt
 
 ## Webhooks
 
