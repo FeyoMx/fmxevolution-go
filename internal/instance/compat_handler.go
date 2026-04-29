@@ -100,13 +100,13 @@ func (h *Handler) LegacyFindChats(c *gin.Context) {
 	}
 
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
-	chats, _, err := h.service.SearchChats(c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c), input)
+	result, _, err := h.service.SearchChats(c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c), input)
 	if err != nil {
 		sharedhandler.WriteError(c, err)
 		return
 	}
 
-	sharedhandler.WriteJSON(c, http.StatusOK, chats)
+	writeChatSearchResult(c, result)
 }
 
 func (h *Handler) LegacyFindMessages(c *gin.Context) {

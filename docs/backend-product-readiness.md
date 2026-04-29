@@ -161,13 +161,14 @@ Readiness notes:
 - Text sending is implemented and job status now tracks `queued`, `running`, `sent`, `delivered`, and `read`.
 - Media sending is implemented through the legacy runtime bridge using JSON base64 payloads or URL payloads.
 - Audio sending is implemented through the legacy runtime bridge and audio conversion path.
-- Chat search is functional as a live runtime-backed list of contacts and groups.
+- Chat search is functional as a live runtime-backed list of contacts and groups, protected by a short tenant-safe cache/throttle layer.
 - Message-history search is implemented against a tenant-safe `ConversationMessage` read model scoped by tenant, instance, and `remoteJid`.
 - Outbound text, media, and audio sends are persisted into that read model.
 - Inbound runtime events are persisted when the active legacy bridge delivers them into the current process.
 - Inbound webhook dispatch now also publishes into the same read model when the webhook payload includes enough message metadata.
 - History sync replay blobs delivered by WhatsApp are now ingested into the same read model, and the SaaS layer can request an on-demand history sync when given an explicit or stored message anchor.
 - Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
+- Repeated chat-list queries are safer for MVP operations: identical tenant+instance+filter requests use a 30-second fresh cache, a 5-second live-query throttle when cached data exists, and a 5-minute stale fallback when the bridge is unavailable or rate-limited.
 - Runtime/history/chat validation now fails more honestly for malformed backfill timestamps and other malformed operator payloads.
 
 ### Instance event connectors and proxy
@@ -281,10 +282,11 @@ Functional routes:
 
 Current limitations:
 
-- live runtime contacts/groups only
+- live runtime contacts/groups only, with short-lived cached snapshots for repeated reads and stale fallback
 - no tenant-safe persisted chat table
 - no true last-message preview parity
 - labels are not sourced from a SaaS chat repository
+- cached/stale responses are marked through `X-Evolution-Chat-*` headers; the response body intentionally remains the compatibility `Chat[]` array
 
 ### Dashboard analytics parity
 
@@ -364,7 +366,7 @@ These capabilities are still missing from the active SaaS surface even though th
 
 - core runtime behavior still depends on the legacy bridge in `pkg/*`
 - message history now uses a tenant-safe SaaS repository, but inbound capture still depends on active bridge events and receipts
-- chat list still depends on live bridge queries and can surface upstream rate-limit behavior
+- chat list still depends on live bridge queries for refreshes, but now uses cache/throttle/stale fallback to reduce upstream rate-limit impact
 - many manager integration suites are represented only as explicit `501` placeholders
 - message totals remain explicitly partial because they only count stored SaaS history rows
 - recipient aggregates also remain partially historical until older broadcasts are re-run or backfilled into recipient progress rows
@@ -373,7 +375,7 @@ These capabilities are still missing from the active SaaS surface even though th
 
 ## Next Recommended Backend Priorities
 
-1. Add operator-safe throttling or caching around live chat-list queries so bridge rate limits do not degrade MVP UX.
+1. Add optional frontend handling for chat cache headers so operators can see when a list is cached or stale.
 2. Tighten targeted integration tests around auth, runtime actions, message search, and backfill envelopes.
 3. Add operator-facing broadcast recipient exports or cursor-based pagination for very large campaigns if list sizes outgrow the current page model.
 4. Reduce remaining reliance on legacy bridge internals by moving reusable runtime adapters into `internal/instance`.

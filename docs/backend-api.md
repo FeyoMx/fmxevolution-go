@@ -270,7 +270,7 @@ These routes were added from the frontend instance/integration gap report withou
 | `POST` | `/instance/id/:instanceID/messages/text` | owner, admin, agent | same as above | same | implemented |
 | `GET` | `/instance/:id/messages/text/:jobID` | owner, admin, agent | none | text-job status with `status`, `delivery_status`, `sent`, `delivery_confirmed`, timestamps, `error?`, `message_id?` | implemented |
 | `GET` | `/instance/id/:instanceID/messages/text/:jobID` | owner, admin, agent | none | same as above | implemented |
-| `POST` | `/instance/:id/chats/search` | owner, admin, agent | `{ where? }` | `Chat[]` compatibility list sourced from live contacts/groups | implemented |
+| `POST` | `/instance/:id/chats/search` | owner, admin, agent | `{ where? }` | `Chat[]` compatibility list sourced from live contacts/groups, with cache metadata in response headers | implemented |
 | `POST` | `/instance/:id/messages/search` | owner, admin, agent | legacy-compatible search payload with `where.key.remoteJid`, optional `limit`, `cursor`, `where.query`, `where.key.id` | `Message[]` chronological history response | implemented |
 | `POST` | `/instance/:id/messages/media` | owner, admin, agent | media JSON payload, accepts either flat fields or nested `mediaMessage` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
 | `POST` | `/instance/:id/messages/audio` | owner, admin, agent | audio JSON payload, accepts either root `audio` or nested `audioMessage.audio` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
@@ -278,6 +278,17 @@ These routes were added from the frontend instance/integration gap report withou
 Notes:
 
 - `chats/search` is now functional, but it is a live runtime-backed list of contacts and groups, not a full persisted chat-history model.
+- Chat-list reads are cached per tenant, instance, and normalized filter for 30 seconds. Cached entries may be used as stale fallback for up to 5 minutes when the live bridge is unavailable or rate-limited.
+- Repeated identical live queries are throttled for 5 seconds when a still-usable cached entry exists, reducing bridge pressure during rapid UI refreshes.
+- The JSON body remains the legacy-compatible `Chat[]` array. Truth metadata is exposed through response headers:
+  - `X-Evolution-Chat-Source`: `live` or `cache`
+  - `X-Evolution-Chat-Cached`: `true` or `false`
+  - `X-Evolution-Chat-Stale`: `true` or `false`
+  - `X-Evolution-Chat-Refreshed-At`: when the cached/live data was last refreshed
+  - `X-Evolution-Chat-Cache-TTL`: fresh cache TTL in seconds
+  - `X-Evolution-Chat-Cache-Stale-TTL`: stale fallback window in seconds
+  - `X-Evolution-Chat-Cache-Reason`: present for stale/throttled cache returns
+- When no cache is available and the live bridge is unavailable or rate-limited, the route returns the shared `{ error, message, code }` envelope with `409 conflict`; these failures are not treated as auth errors.
 - `messages/search` is now backed by a tenant-safe `ConversationMessage` read model in the SaaS database.
 - Current persistence is strongest for outbound text/media/audio sends.
 - Inbound messages are now persisted through both the active runtime bridge callback path and a tenant-safe inbound webhook fallback path when `DispatchInbound` includes enough message metadata.
@@ -351,7 +362,7 @@ These routes were added because the current sibling frontend still calls manager
 
 | Method | Path | Roles | Request body | Success response | Status |
 |---|---|---|---|---|---|
-| `POST` | `/chat/findChats/:instanceName` | owner, admin, agent | `{ where? }` | same runtime-backed `Chat[]` list as SaaS chat search | implemented |
+| `POST` | `/chat/findChats/:instanceName` | owner, admin, agent | `{ where? }` | same cache-aware runtime-backed `Chat[]` list as SaaS chat search | implemented |
 | `POST` | `/chat/findMessages/:instanceName` | owner, admin, agent | legacy-compatible message search payload | same `Message[]` history response as SaaS route | implemented |
 | `POST` | `/message/sendText/:instanceName` | owner, admin, agent | `{ number, text, options? }` | legacy-style `{ message, data }` success response | implemented |
 | `POST` | `/message/sendMedia/:instanceName` | owner, admin, agent | legacy-compatible media JSON payload | legacy-style `{ message, data }` success response | implemented |

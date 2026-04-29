@@ -67,6 +67,7 @@
 - Added live runtime-backed chat list support on:
   - `/instance/:id/chats/search`
   - `/chat/findChats/:instanceName`
+- Added operator-safe chat-list caching for live bridge-backed chat search, with tenant+instance+filter cache keys, conservative TTLs, stale fallback on bridge/rate-limit failures, and response headers that mark cached/stale results without changing the `Chat[]` body shape
 - Added tenant-safe runtime admin routes for:
   - `/instance/:id/reconnect`
   - `/instance/:id/pair`
@@ -100,7 +101,7 @@
 
 ### Known partial areas
 
-- Chat list remains live-bridge-backed and can still inherit upstream rate limits
+- Chat list remains live-bridge-backed, but repeated identical queries now use a short tenant-safe cache and stale fallback when the live bridge is unavailable or rate-limited
 - Redis rate limiting is not implemented yet
 - Swagger artifacts under `docs/` still represent older/legacy API surfaces and remain out of sync with `cmd/api`
 - The SaaS API still depends on the legacy engine for QR, connection lifecycle, and advanced instance settings

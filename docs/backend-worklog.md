@@ -56,6 +56,12 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
   - `POST /instance/:id/messages/audio`
 - implemented live runtime-backed chat list on:
   - `POST /instance/:id/chats/search`
+- added an operator-safe cache/throttle layer around live chat-list queries:
+  - cache key is tenant ID + instance ID + normalized chat filter
+  - fresh cache TTL is 30 seconds
+  - stale fallback window is 5 minutes
+  - repeated identical live refreshes are throttled for 5 seconds when cached data exists
+  - cache/stale truth is exposed through `X-Evolution-Chat-*` headers while preserving the `Chat[]` body
 - implemented tenant-safe message history search on:
   - `POST /instance/:id/messages/search`
   - `POST /chat/findMessages/:instanceName`
@@ -130,6 +136,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 ## Important remaining gaps
 
 - inbound history is still partial because there is no backfill from older sessions or full upstream history replay
+- chat-list cache reduces bridge pressure but does not create a durable chat metadata model
 - Chatwoot, SQS, and manager-style integration suites remain explicit `501 partial`
 - runtime parity still depends heavily on the legacy bridge for live snapshots, QR retrieval, and connection actions
 - logout truthfulness is limited by the live bridge: if there is no active logged-in runtime session, the backend now returns an explicit error instead of faking success
@@ -198,6 +205,7 @@ High-signal files updated for this phase include:
 ### Still intentionally partial
 
 - inbound history completeness and backfill across older sessions
+- chat-list metadata parity; cached results are temporary snapshots, not a persisted chat table
 - `GET/PUT /instance/:id/sqs`
 - `GET/PUT /instance/:id/chatwoot`
 - all mounted manager bot/integration suites under:

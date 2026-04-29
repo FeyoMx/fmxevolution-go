@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,6 +26,7 @@ type Service struct {
 	runtime        Runtime
 	runtimeFactory func() (Runtime, error)
 	runtimeMu      sync.Mutex
+	chatCache      *chatSearchCache
 	logger         *slog.Logger
 }
 
@@ -64,6 +66,7 @@ func NewService(repo repository.InstanceRepository, history repository.Conversat
 		observability:  observability,
 		runtime:        runtime,
 		runtimeFactory: runtimeFactory,
+		chatCache:      newChatSearchCache(defaultChatSearchFreshTTL, defaultChatSearchStaleTTL, defaultChatSearchLiveThrottle),
 		logger:         logger,
 	}
 }
@@ -957,27 +960,61 @@ func (s *Service) SendAudio(ctx context.Context, tenantID, reference string, inp
 	return message, instance, nil
 }
 
-func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, input ChatSearchRequest) ([]chatSearchRecord, *repository.Instance, error) {
+func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, input ChatSearchRequest) (*ChatSearchResult, *repository.Instance, error) {
 	instance, err := s.resolve(ctx, tenantID, reference)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	filter := normalizeChatSearchFilter(input)
+	cache := s.chatSearchCache()
+	if cached, ok := cache.fresh(tenantID, instance.ID, filter, time.Now().UTC()); ok {
+		return cached, instance, nil
+	}
+	if cached, ok := cache.throttled(tenantID, instance.ID, filter, time.Now().UTC()); ok {
+		return cached, instance, nil
+	}
+
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
-		if ensureErr != nil {
-			return nil, instance, ensureErr
+		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), "bridge_unavailable"); ok {
+			if s.logger != nil {
+				s.logger.Warn("search chats returning stale cache because runtime is unavailable", "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference, "error", ensureErr)
+			}
+			return cached, instance, nil
 		}
-		return nil, instance, fmt.Errorf("runtime unavailable")
+		if ensureErr != nil {
+			return nil, instance, normalizeChatSearchBridgeError(ensureErr)
+		}
+		return nil, instance, normalizeChatSearchBridgeError(fmt.Errorf("runtime unavailable"))
 	}
 
-	legacyRuntime, ok := runtime.(*LegacyRuntime)
+	chatRuntime, ok := runtime.(chatSearchRuntime)
 	if !ok {
-		return nil, instance, fmt.Errorf("legacy runtime unavailable")
+		err := fmt.Errorf("legacy runtime unavailable")
+		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), "bridge_unavailable"); ok {
+			if s.logger != nil {
+				s.logger.Warn("search chats returning stale cache because chat runtime is unavailable", "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference)
+			}
+			return cached, instance, nil
+		}
+		return nil, instance, normalizeChatSearchBridgeError(err)
 	}
 
-	chats, err := legacyRuntime.SearchChats(ctx, instance, normalizeChatSearchFilter(input))
+	chats, err := chatRuntime.SearchChats(ctx, instance, filter)
 	if err != nil {
+		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), staleReasonForChatSearchError(err)); ok {
+			if s.logger != nil {
+				s.logger.Warn(
+					"search chats returning stale cache after live bridge failure",
+					"tenant_id", tenantID,
+					"instance_id", instance.ID,
+					"reference", reference,
+					"error", err,
+				)
+			}
+			return cached, instance, nil
+		}
 		if s.logger != nil {
 			s.logger.Error(
 				"search chats failed",
@@ -986,10 +1023,64 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 				"error", err,
 			)
 		}
-		return nil, instance, err
+		return nil, instance, normalizeChatSearchBridgeError(err)
 	}
 
-	return chats, instance, nil
+	result := cache.store(tenantID, instance.ID, filter, chats, time.Now().UTC())
+	return result, instance, nil
+}
+
+func (s *Service) chatSearchCache() *chatSearchCache {
+	if s.chatCache != nil {
+		return s.chatCache
+	}
+
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	if s.chatCache == nil {
+		s.chatCache = newChatSearchCache(defaultChatSearchFreshTTL, defaultChatSearchStaleTTL, defaultChatSearchLiveThrottle)
+	}
+	return s.chatCache
+}
+
+func normalizeChatSearchBridgeError(err error) error {
+	if err == nil {
+		err = fmt.Errorf("runtime unavailable")
+	}
+	if errors.Is(err, domain.ErrTimeout) || errors.Is(err, domain.ErrValidation) || errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(message, "rate limit"),
+		strings.Contains(message, "ratelimit"),
+		strings.Contains(message, "too many requests"),
+		strings.Contains(message, "429"):
+		return fmt.Errorf("%w: live chat search is rate limited; retry shortly or use cached data when available", domain.ErrConflict)
+	case strings.Contains(message, "runtime unavailable"),
+		strings.Contains(message, "legacy runtime unavailable"),
+		strings.Contains(message, "legacy client runtime unavailable"),
+		strings.Contains(message, "legacy chat services unavailable"),
+		strings.Contains(message, "no active session found"),
+		strings.Contains(message, "not connected"),
+		strings.Contains(message, "connection"),
+		strings.Contains(message, "timeout"):
+		return fmt.Errorf("%w: live chat search unavailable; no cached chat list is available", domain.ErrConflict)
+	default:
+		return err
+	}
+}
+
+func staleReasonForChatSearchError(err error) string {
+	if err == nil {
+		return "bridge_unavailable"
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(message, "rate limit") || strings.Contains(message, "ratelimit") || strings.Contains(message, "too many requests") || strings.Contains(message, "429") {
+		return "bridge_rate_limited"
+	}
+	return "bridge_unavailable"
 }
 
 func (s *Service) SearchMessages(ctx context.Context, tenantID, reference string, input MessageSearchRequest) ([]legacyMessageRecord, *repository.Instance, error) {
