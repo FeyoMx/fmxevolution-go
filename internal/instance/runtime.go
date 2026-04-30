@@ -579,7 +579,7 @@ func (r *LegacyRuntime) Pair(ctx context.Context, instance *repository.Instance,
 		return nil, fmt.Errorf("%w: phone is required", domain.ErrValidation)
 	}
 
-	client := r.clientPointer[legacyInstance.Id]
+	client := legacyWhatsmeow.GetClientPointer(r.clientPointer, legacyInstance.Id)
 	if client != nil && client.IsLoggedIn() {
 		return nil, fmt.Errorf("%w: pairing is only available while the runtime is awaiting login", domain.ErrConflict)
 	}
@@ -674,7 +674,7 @@ func (r *LegacyRuntime) Snapshot(ctx context.Context, instance *repository.Insta
 		return nil, err
 	}
 
-	return buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id]), nil
+	return buildRuntimeSnapshot(legacyInstance, legacyWhatsmeow.GetClientPointer(r.clientPointer, legacyInstance.Id)), nil
 }
 
 func (r *LegacyRuntime) QRCode(ctx context.Context, instance *repository.Instance) (*RuntimeSnapshot, error) {
@@ -691,7 +691,7 @@ func (r *LegacyRuntime) QRCode(ctx context.Context, instance *repository.Instanc
 	qrLock.Lock()
 	defer qrLock.Unlock()
 
-	snapshot := buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id])
+	snapshot := buildRuntimeSnapshot(legacyInstance, legacyWhatsmeow.GetClientPointer(r.clientPointer, legacyInstance.Id))
 	// If the session is already active, do not re-enter the legacy QR flow.
 	// Repeated /qrcode polling during an active session can contend with send/status work.
 	if snapshot.LoggedIn || (snapshot.Connected && strings.EqualFold(snapshot.Status, "open")) {
@@ -722,7 +722,7 @@ func (r *LegacyRuntime) QRCode(ctx context.Context, instance *repository.Instanc
 		return nil, err
 	}
 
-	snapshot = buildRuntimeSnapshot(legacyInstance, r.clientPointer[legacyInstance.Id])
+	snapshot = buildRuntimeSnapshot(legacyInstance, legacyWhatsmeow.GetClientPointer(r.clientPointer, legacyInstance.Id))
 	snapshot.QRCode = qr.Qrcode
 	snapshot.PairingCode = qr.Code
 	if snapshot.Status == "" || snapshot.Status == "close" {
@@ -996,7 +996,7 @@ func (r *LegacyRuntime) refreshConnectedClient(instance *legacyInstanceModel.Ins
 }
 
 func (r *LegacyRuntime) reconnectExistingClient(instance *legacyInstanceModel.Instance) (*whatsmeow.Client, error) {
-	client := r.clientPointer[instance.Id]
+	client := legacyWhatsmeow.GetClientPointer(r.clientPointer, instance.Id)
 	if client == nil {
 		return nil, fmt.Errorf("client not initialized")
 	}
@@ -1026,7 +1026,7 @@ func (r *LegacyRuntime) hardReconnectClient(instance *legacyInstanceModel.Instan
 func (r *LegacyRuntime) waitForActiveClient(instanceID string, timeout time.Duration) (*whatsmeow.Client, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		client := r.clientPointer[instanceID]
+		client := legacyWhatsmeow.GetClientPointer(r.clientPointer, instanceID)
 		if client != nil && client.IsConnected() && client.IsLoggedIn() {
 			return client, nil
 		}
@@ -1040,7 +1040,7 @@ func (r *LegacyRuntime) waitForActiveClient(instanceID string, timeout time.Dura
 func (r *LegacyRuntime) waitForPairingClient(instanceID string, timeout time.Duration) (*whatsmeow.Client, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		client := r.clientPointer[instanceID]
+		client := legacyWhatsmeow.GetClientPointer(r.clientPointer, instanceID)
 		if client != nil && client.IsConnected() && !client.IsLoggedIn() {
 			return client, nil
 		}
@@ -1409,7 +1409,7 @@ func isQRCodePendingError(err error) bool {
 }
 
 func (r *LegacyRuntime) hasClientPointer(instanceID string) bool {
-	_, ok := r.clientPointer[instanceID]
+	ok := legacyWhatsmeow.GetClientPointer(r.clientPointer, instanceID) != nil
 	return ok
 }
 
