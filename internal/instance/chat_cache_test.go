@@ -121,6 +121,29 @@ func TestSearchChatsReturnsStaleCacheWhenBridgeFails(t *testing.T) {
 	}
 }
 
+func TestSearchChatsThrottlesRepeatedFailedLiveQueries(t *testing.T) {
+	runtime := &chatRuntimeMock{err: errors.New("bridge unavailable")}
+	service := NewService(
+		lifecycleInstanceRepoMock{instance: &repository.Instance{ID: "instance-1", TenantID: "tenant-1", Name: "alpha"}},
+		nil,
+		nil,
+		runtime,
+		nil,
+		nil,
+	)
+	service.chatCache = newChatSearchCache(time.Nanosecond, 5*time.Minute, time.Minute)
+
+	if _, _, err := service.SearchChats(context.Background(), "tenant-1", "instance-1", ChatSearchRequest{Where: map[string]any{"query": "lu"}}); err == nil {
+		t.Fatal("expected first bridge failure")
+	}
+	if _, _, err := service.SearchChats(context.Background(), "tenant-1", "instance-1", ChatSearchRequest{Where: map[string]any{"query": "lu"}}); err == nil {
+		t.Fatal("expected throttled query to return an operator-visible error")
+	}
+	if runtime.calls != 1 {
+		t.Fatalf("expected failed live query to mark throttle window, got %d live calls", runtime.calls)
+	}
+}
+
 func TestSearchChatsCacheIsTenantSafe(t *testing.T) {
 	runtime := &chatRuntimeMock{
 		items: []chatSearchRecord{{ID: "chat-1", RemoteJID: "521@s.whatsapp.net", PushName: "Luis"}},

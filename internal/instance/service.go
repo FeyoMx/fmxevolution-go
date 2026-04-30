@@ -20,15 +20,24 @@ import (
 )
 
 type Service struct {
-	repo           repository.InstanceRepository
-	history        repository.ConversationMessageRepository
-	observability  repository.RuntimeObservabilityRepository
-	runtime        Runtime
-	runtimeFactory func() (Runtime, error)
-	runtimeMu      sync.Mutex
-	chatCache      *chatSearchCache
-	logger         *slog.Logger
+	repo                 repository.InstanceRepository
+	history              repository.ConversationMessageRepository
+	observability        repository.RuntimeObservabilityRepository
+	runtime              Runtime
+	runtimeFactory       func() (Runtime, error)
+	runtimeMu            sync.Mutex
+	chatCache            *chatSearchCache
+	runtimeObservationMu sync.Mutex
+	runtimeObservations  map[string]time.Time
+	noisyLogMu           sync.Mutex
+	noisyLogs            map[string]time.Time
+	logger               *slog.Logger
 }
+
+const (
+	runtimeObservationMinInterval = 15 * time.Second
+	noisyLogMinInterval           = 30 * time.Second
+)
 
 type CreateInput struct {
 	Name             string `json:"name"`
@@ -61,13 +70,15 @@ type SendTextJobStatus = sendstatus.JobStatus
 
 func NewService(repo repository.InstanceRepository, history repository.ConversationMessageRepository, observability repository.RuntimeObservabilityRepository, runtime Runtime, runtimeFactory func() (Runtime, error), logger *slog.Logger) *Service {
 	return &Service{
-		repo:           repo,
-		history:        history,
-		observability:  observability,
-		runtime:        runtime,
-		runtimeFactory: runtimeFactory,
-		chatCache:      newChatSearchCache(defaultChatSearchFreshTTL, defaultChatSearchStaleTTL, defaultChatSearchLiveThrottle),
-		logger:         logger,
+		repo:                repo,
+		history:             history,
+		observability:       observability,
+		runtime:             runtime,
+		runtimeFactory:      runtimeFactory,
+		chatCache:           newChatSearchCache(defaultChatSearchFreshTTL, defaultChatSearchStaleTTL, defaultChatSearchLiveThrottle),
+		runtimeObservations: make(map[string]time.Time),
+		noisyLogs:           make(map[string]time.Time),
+		logger:              logger,
 	}
 }
 
@@ -974,11 +985,14 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 	if cached, ok := cache.throttled(tenantID, instance.ID, filter, time.Now().UTC()); ok {
 		return cached, instance, nil
 	}
+	if !cache.beginLiveAttempt(tenantID, instance.ID, filter, time.Now().UTC()) {
+		return nil, instance, fmt.Errorf("%w: live chat search is temporarily throttled; retry shortly", domain.ErrConflict)
+	}
 
 	runtime, ensureErr := s.ensureRuntime()
 	if runtime == nil {
 		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), "bridge_unavailable"); ok {
-			if s.logger != nil {
+			if s.shouldLogNoisy(chatSearchStaleLogKey(tenantID, instance.ID, filter, "runtime_unavailable"), time.Now().UTC()) && s.logger != nil {
 				s.logger.Warn("search chats returning stale cache because runtime is unavailable", "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference, "error", ensureErr)
 			}
 			return cached, instance, nil
@@ -993,7 +1007,7 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 	if !ok {
 		err := fmt.Errorf("legacy runtime unavailable")
 		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), "bridge_unavailable"); ok {
-			if s.logger != nil {
+			if s.shouldLogNoisy(chatSearchStaleLogKey(tenantID, instance.ID, filter, "chat_runtime_unavailable"), time.Now().UTC()) && s.logger != nil {
 				s.logger.Warn("search chats returning stale cache because chat runtime is unavailable", "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference)
 			}
 			return cached, instance, nil
@@ -1003,8 +1017,9 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 
 	chats, err := chatRuntime.SearchChats(ctx, instance, filter)
 	if err != nil {
-		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), staleReasonForChatSearchError(err)); ok {
-			if s.logger != nil {
+		reason := staleReasonForChatSearchError(err)
+		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), reason); ok {
+			if s.shouldLogNoisy(chatSearchStaleLogKey(tenantID, instance.ID, filter, reason), time.Now().UTC()) && s.logger != nil {
 				s.logger.Warn(
 					"search chats returning stale cache after live bridge failure",
 					"tenant_id", tenantID,
@@ -1677,6 +1692,9 @@ func (s *Service) recordRuntimeObservation(ctx context.Context, instance *reposi
 	if err != nil {
 		errorMessage = strings.TrimSpace(err.Error())
 	}
+	if !s.shouldRecordRuntimeObservation(instance.ID, eventType, status, connected, loggedIn, pairingActive, errorMessage, now) {
+		return
+	}
 
 	runtimeobs.NotifyLifecycleEvent(runtimeobs.LifecycleEvent{
 		InstanceID:       instance.ID,
@@ -1692,6 +1710,62 @@ func (s *Service) recordRuntimeObservation(ctx context.Context, instance *reposi
 		Payload:          runtimeObservationPayload(snapshot),
 		OccurredAt:       now,
 	})
+}
+
+func (s *Service) shouldRecordRuntimeObservation(instanceID, eventType, status string, connected, loggedIn, pairingActive bool, errorMessage string, now time.Time) bool {
+	if strings.TrimSpace(eventType) != "status_observed" {
+		return true
+	}
+
+	s.runtimeObservationMu.Lock()
+	defer s.runtimeObservationMu.Unlock()
+	if s.runtimeObservations == nil {
+		s.runtimeObservations = make(map[string]time.Time)
+	}
+
+	key := strings.Join([]string{
+		strings.TrimSpace(instanceID),
+		strings.TrimSpace(eventType),
+		strings.TrimSpace(status),
+		fmt.Sprintf("%t", connected),
+		fmt.Sprintf("%t", loggedIn),
+		fmt.Sprintf("%t", pairingActive),
+		strings.TrimSpace(errorMessage),
+	}, "\x00")
+	if last := s.runtimeObservations[key]; !last.IsZero() && now.Sub(last) < runtimeObservationMinInterval {
+		return false
+	}
+	s.runtimeObservations[key] = now
+	return true
+}
+
+func (s *Service) shouldLogNoisy(key string, now time.Time) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return true
+	}
+
+	s.noisyLogMu.Lock()
+	defer s.noisyLogMu.Unlock()
+	if s.noisyLogs == nil {
+		s.noisyLogs = make(map[string]time.Time)
+	}
+	if last := s.noisyLogs[key]; !last.IsZero() && now.Sub(last) < noisyLogMinInterval {
+		return false
+	}
+	s.noisyLogs[key] = now
+	return true
+}
+
+func chatSearchStaleLogKey(tenantID, instanceID string, filter chatSearchFilter, reason string) string {
+	return strings.Join([]string{
+		"chat_search_stale",
+		strings.TrimSpace(tenantID),
+		strings.TrimSpace(instanceID),
+		strings.ToLower(strings.TrimSpace(filter.RemoteJID)),
+		strings.ToLower(strings.TrimSpace(filter.Query)),
+		strings.TrimSpace(reason),
+	}, "\x00")
 }
 
 func (s *Service) logLifecycleAction(action string, instance *repository.Instance, reference string) {

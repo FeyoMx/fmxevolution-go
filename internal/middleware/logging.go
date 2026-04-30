@@ -41,7 +41,7 @@ func RequestLogging(logger *slog.Logger) gin.HandlerFunc {
 }
 
 func shouldSkipRequestLog(path, method string, status int, latency time.Duration) bool {
-	if method != "GET" || status != 200 {
+	if status != 200 {
 		return false
 	}
 
@@ -50,12 +50,27 @@ func shouldSkipRequestLog(path, method string, status int, latency time.Duration
 		return false
 	}
 
-	// The frontend polls QR routes very aggressively while the session is already
-	// connected. Successful low-latency responses add little operational value and
-	// can drown out real errors in the backend logs.
-	if (strings.HasSuffix(normalized, "/qr") || strings.HasSuffix(normalized, "/qrcode")) && latency < 500*time.Millisecond {
+	if latency >= 500*time.Millisecond {
+		return false
+	}
+
+	if method == "GET" && isHighFrequencyStatusPath(normalized) {
+		return true
+	}
+
+	if method == "POST" && strings.HasSuffix(normalized, "/chats/search") {
 		return true
 	}
 
 	return false
+}
+
+func isHighFrequencyStatusPath(path string) bool {
+	if strings.HasSuffix(path, "/qr") || strings.HasSuffix(path, "/qrcode") {
+		return true
+	}
+	if strings.HasSuffix(path, "/status") || strings.HasSuffix(path, "/runtime/status") {
+		return true
+	}
+	return strings.Contains(path, "/runtime/")
 }

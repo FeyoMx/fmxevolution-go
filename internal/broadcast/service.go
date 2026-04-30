@@ -489,7 +489,7 @@ func (s *Service) HandleReceipt(ctx context.Context, instanceID, messageID, stat
 		return err
 	}
 	if updated && s.logger != nil {
-		s.logger.Info(
+		s.logger.Debug(
 			"broadcast recipient receipt recorded",
 			"tenant_id", instanceRecord.TenantID,
 			"instance_id", instanceRecord.ID,

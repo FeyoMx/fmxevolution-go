@@ -87,7 +87,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		}
 
 		if p.logger != nil {
-			p.logger.Info(
+			p.logger.Debug(
 				"broadcast recipient send attempt",
 				"job_id", job.ID,
 				"tenant_id", job.TenantID,
@@ -177,7 +177,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 			return retryableProcessorError(fmt.Errorf("persist broadcast recipient success for %s: %w", recipient.Phone, err))
 		}
 		if p.logger != nil {
-			p.logger.Info(
+			p.logger.Debug(
 				"broadcast recipient delivered",
 				"job_id", job.ID,
 				"tenant_id", job.TenantID,

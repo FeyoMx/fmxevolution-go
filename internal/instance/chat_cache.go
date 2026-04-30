@@ -100,6 +100,19 @@ func (c *chatSearchCache) throttled(tenantID, instanceID string, filter chatSear
 	return c.resultFromEntry(entry, true, "cache", "live_query_throttled"), true
 }
 
+func (c *chatSearchCache) beginLiveAttempt(tenantID, instanceID string, filter chatSearchFilter, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	key := chatSearchCacheKey(tenantID, instanceID, filter)
+	lastLiveAttempt := c.lastLiveAttempt[key]
+	if !lastLiveAttempt.IsZero() && now.Sub(lastLiveAttempt) < c.liveThrottle {
+		return false
+	}
+	c.lastLiveAttempt[key] = now
+	return true
+}
+
 func (c *chatSearchCache) stale(tenantID, instanceID string, filter chatSearchFilter, now time.Time, reason string) (*ChatSearchResult, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -26,7 +26,10 @@ type LifecycleListener func(LifecycleEvent)
 var lifecycleRegistry = struct {
 	mu        sync.RWMutex
 	listeners []LifecycleListener
+	lastSeen  map[string]time.Time
 }{}
+
+const lifecycleStatusObservedMinInterval = 15 * time.Second
 
 func RegisterLifecycleListener(listener LifecycleListener) {
 	if listener == nil {
@@ -53,6 +56,10 @@ func NotifyLifecycleEvent(event LifecycleEvent) {
 	event.ErrorMessage = strings.TrimSpace(event.ErrorMessage)
 	event.Message = strings.TrimSpace(event.Message)
 
+	if shouldDropDuplicateLifecycleEvent(event) {
+		return
+	}
+
 	lifecycleRegistry.mu.RLock()
 	listeners := append([]LifecycleListener(nil), lifecycleRegistry.listeners...)
 	lifecycleRegistry.mu.RUnlock()
@@ -60,4 +67,39 @@ func NotifyLifecycleEvent(event LifecycleEvent) {
 	for _, listener := range listeners {
 		go listener(event)
 	}
+}
+
+func shouldDropDuplicateLifecycleEvent(event LifecycleEvent) bool {
+	if event.EventType != "status_observed" {
+		return false
+	}
+
+	key := strings.Join([]string{
+		event.InstanceID,
+		event.EventType,
+		event.Status,
+		boolKey(event.Connected),
+		boolKey(event.LoggedIn),
+		boolKey(event.PairingActive),
+		event.DisconnectReason,
+		event.ErrorMessage,
+	}, "\x00")
+
+	lifecycleRegistry.mu.Lock()
+	defer lifecycleRegistry.mu.Unlock()
+	if lifecycleRegistry.lastSeen == nil {
+		lifecycleRegistry.lastSeen = make(map[string]time.Time)
+	}
+	if last := lifecycleRegistry.lastSeen[key]; !last.IsZero() && event.OccurredAt.Sub(last) < lifecycleStatusObservedMinInterval {
+		return true
+	}
+	lifecycleRegistry.lastSeen[key] = event.OccurredAt
+	return false
+}
+
+func boolKey(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }

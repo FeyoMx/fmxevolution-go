@@ -909,9 +909,7 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 						return
 					}
 
-					if w.config.LogType != "json" {
-						fmt.Println("QR code:\n", evt.Code)
-					}
+					w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("[%s] QR code generated count=%d max_count=%d code_length=%d", cd.Instance.Id, mycli.qrcodeCount, w.config.QrcodeMaxCount, len(evt.Code))
 
 					image, _ := qrcode.Encode(evt.Code, qrcode.Medium, 256)
 					base64qrcode := "data:image/png;base64," + base64.StdEncoding.EncodeToString(image)
@@ -1231,7 +1229,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Updating JID: %s in Instance: %s", mycli.userID, mycli.WAClient.Store.ID.String(), instance.Jid)
 
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Attempting to update instance in DB: %+v", mycli.userID, instance)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Attempting to update instance in DB instance_id=%s connected=%t jid=%s", mycli.userID, instance.Id, instance.Connected, instance.Jid)
 		err = mycli.instanceRepository.Update(instance)
 		if err != nil {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Error updating instance: %s", mycli.userID, err)
@@ -1450,13 +1448,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		if evt.Message.GetPollUpdateMessage() != nil {
-			fmt.Printf("[POLL DEBUG] 🎯 PollUpdateMessage detected!\n")
-			fmt.Printf("[POLL DEBUG] � BEFORE accessing evt.Info - Sender: %s, Server: %s\n", evt.Info.Sender.String(), evt.Info.Sender.Server)
-			fmt.Printf("[POLL DEBUG] 📍 BEFORE accessing evt.Info - SenderAlt: %s\n", evt.Info.SenderAlt.String())
-			fmt.Printf("[POLL DEBUG] �� mycli.WAClient is nil: %v\n", mycli.WAClient == nil)
-			if mycli.WAClient != nil {
-				fmt.Printf("[POLL DEBUG] ✅ mycli.WAClient is initialized: %s\n", mycli.WAClient.Store.ID)
-			}
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Poll update message detected sender=%s server=%s", mycli.userID, evt.Info.Sender.String(), evt.Info.Sender.Server)
 
 			decrypted, err := mycli.clientPointer[mycli.userID].DecryptPollVote(context.Background(), evt)
 			if err != nil {
@@ -1908,10 +1900,10 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		doWebhook = true
 		postMap["event"] = "HistorySync"
 
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] History sync event received %+v", mycli.userID, evt.Data.SyncType)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] History sync event received sync_type=%s", mycli.userID, evt.Data.SyncType.String())
 		ingestHistorySync(mycli.userID, mycli.WAClient, evt.Data, mycli.loggerWrapper.GetLogger(mycli.userID))
 	case *events.AppState:
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] App state event received %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] App state event received", mycli.userID)
 	case *events.LoggedOut:
 		notifyRuntimeLifecycle(mycli.userID, "logout", "close", "client logged out", false, false, false, evt.Reason.String(), "", map[string]any{
 			"reason": evt.Reason.String(),
@@ -1984,7 +1976,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.ChatPresence:
 		doWebhook = true
 		postMap["event"] = "ChatPresence"
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Chat presence received %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Chat presence received chat=%s state=%s", mycli.userID, evt.Chat.String(), evt.State)
 	case *events.CallOffer:
 		doWebhook = true
 		postMap["event"] = "CallOffer"
@@ -2014,23 +2006,23 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			return
 		}
 
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Got call offer %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Call offer received creator=%s call_id=%s", mycli.userID, evt.CallCreator.String(), evt.CallID)
 	case *events.CallAccept:
 		doWebhook = true
 		postMap["event"] = "CallAccept"
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Got call accept %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Call accept received", mycli.userID)
 	case *events.CallTerminate:
 		doWebhook = true
 		postMap["event"] = "CallTerminate"
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Got call terminate %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Call terminate received", mycli.userID)
 	case *events.CallOfferNotice:
 		doWebhook = true
 		postMap["event"] = "CallOfferNotice"
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Got call offer notice %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Call offer notice received", mycli.userID)
 	case *events.CallRelayLatency:
 		doWebhook = true
 		postMap["event"] = "CallRelayLatency"
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Got call relay latency %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Call relay latency received", mycli.userID)
 	case *events.OfflineSyncCompleted:
 		doWebhook = true
 		postMap["event"] = "OfflineSyncCompleted"
@@ -2078,7 +2070,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.LabelEdit:
 		doWebhook = true
 		postMap["event"] = "LabelEdit"
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Got label edit %+v", mycli.userID, evt.Action)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Label edit received label_id=%s", mycli.userID, evt.LabelID)
 
 		label := label_model.Label{
 			InstanceID:   mycli.userID,
@@ -2096,12 +2088,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		doWebhook = true
 		postMap["event"] = "LabelAssociationChat"
 
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Label association chat received %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Label association chat received label_id=%s chat_id=%s", mycli.userID, evt.LabelID, evt.JID.String())
 	case *events.LabelAssociationMessage:
 		doWebhook = true
 		postMap["event"] = "LabelAssociationMessage"
 
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Label association message received %+v", mycli.userID, evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Label association message received label_id=%s message_id=%s", mycli.userID, evt.LabelID, evt.MessageID)
 	case *events.Contact:
 		doWebhook = true
 		postMap["event"] = "Contact"
@@ -2133,7 +2125,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if err != nil {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Undecryptable message received: %s", mycli.userID, evt.Info.ID)
 		}
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Undecryptable message received all: %+v", mycli.userID, string(jsonEvt))
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Undecryptable message received id=%s unavailable_type=%s payload_bytes=%d", mycli.userID, evt.Info.ID, evt.UnavailableType, len(jsonEvt))
 
 		if evt.UnavailableType == "view_once" {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Undecryptable message received view_once: %s", mycli.userID, evt.Info.ID)
@@ -2153,7 +2145,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] ID is not 66 or 67 or view_once, skipping", mycli.userID)
 		}
 	default:
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Unhandled event %s: %+v", mycli.userID, fmt.Sprintf("%T", evt), evt)
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Unhandled event type=%s", mycli.userID, fmt.Sprintf("%T", evt))
 		return
 	}
 
