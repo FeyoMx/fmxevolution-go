@@ -26,6 +26,17 @@ Main gaps:
 - runtime parity still depends on the legacy bridge in `pkg/*`
 - inbound history persistence is more reliable, and bridge-delivered history-sync blobs are now ingested, but completeness is still bridge-dependent and not universally backfilled from arbitrary older sessions
 
+## Development QA Data
+
+The backend includes an explicit development-only seed command for dense manual QA:
+
+- command: `go run ./cmd/qa-seed`
+- required safety flag: `QA_SEED_ENABLED=true`
+- refused environments: `APP_ENV=production` and `APP_ENV=prod`
+- normal API startup never runs this seed path
+
+Default QA fixture data is tenant-scoped to `qa-seed` unless an existing `-tenant-id` or alternate `-tenant-slug` is supplied. The command creates or updates deterministic QA rows for contacts, broadcast jobs, broadcast recipient progress, conversation messages, runtime state, and runtime events. It is meant for local/dev QA only and does not imply production parity for durable chat metadata or historical WhatsApp replay.
+
 ## Fully Implemented Routes and Features
 
 ### Public and identity

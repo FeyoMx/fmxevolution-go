@@ -129,6 +129,13 @@
 - Added broadcast queue logging with tenant and instance context for operator troubleshooting
 - Added clearer lifecycle, backfill, and runtime snapshot failure logs with tenant and instance context
 
+### Development and QA tooling
+
+- Added explicit development-only QA seed tooling under `cmd/qa-seed`
+- Required `QA_SEED_ENABLED=true` and refused `APP_ENV=production` / `APP_ENV=prod` so QA fixtures cannot run accidentally in production
+- Seeded deterministic tenant-scoped fixture data for dense manual QA: contacts, broadcast jobs, broadcast recipient progress, conversation messages, runtime state, and runtime events
+- Kept QA fixture generation isolated from normal API startup and runtime behavior
+
 ### Release candidate docs
 
 - Added `docs/mvp-scope.md` to freeze the supported MVP surface and clarify what is partial or out of scope

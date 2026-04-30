@@ -10,6 +10,37 @@ This checklist is intended for manual MVP release candidate validation.
 - Call `GET /healthz` and confirm `{ "status": "ok" }`.
 - Confirm protected routes reject missing auth with a consistent error envelope.
 
+## Optional QA seed data
+
+The backend includes a development-only QA seed command for dense manual testing. It is disabled by default and refuses `APP_ENV=production` or `APP_ENV=prod`.
+
+Example PowerShell usage against a development database:
+
+```powershell
+$env:APP_ENV = "development"
+$env:QA_SEED_ENABLED = "true"
+$env:DATABASE_URL = "postgres://user:pass@localhost:5432/fmx_dev?sslmode=disable"
+$env:JWT_SECRET = "local-dev-secret"
+go run ./cmd/qa-seed -tenant-slug qa-seed -create-tenant=true
+```
+
+Default created login, when the tenant/admin does not already exist:
+
+- tenant slug: `qa-seed`
+- admin email: `qa.admin@example.test`
+- admin password: `QaSeed123!`
+
+Fixture coverage:
+
+- 125 tenant-scoped contacts
+- one dense instance plus one intentionally sparse instance
+- six broadcast jobs, including one historical job with no recipient snapshot
+- 150 broadcast recipient progress rows across `pending`, `sent`, `delivered`, `read`, and `failed`
+- 240 conversation messages across three chats
+- durable runtime state plus mixed lifecycle/history events
+
+The command is deterministic and safe to rerun for the same tenant; it updates the QA fixture rows instead of creating unbounded duplicates.
+
 ## Auth
 
 - Log in with a valid tenant slug, email, and password.
@@ -76,8 +107,9 @@ This checklist is intended for manual MVP release candidate validation.
 - Create a broadcast job with valid input.
 - List broadcast jobs with and without the `limit` query parameter.
 - Confirm negative `delay_sec`, `rate_per_hour`, or `max_attempts` values are rejected.
+- Confirm `GET /broadcast/:id/recipients` defaults omitted `page`/`limit`, rejects negative pagination, and displays mixed recipient states from the QA seed.
 - Confirm broadcast detail is tenant-scoped.
-- Confirm operators understand that queueing works but delivery execution remains partial.
+- Confirm operators understand that delivery execution is real but receipt progression beyond `sent` remains runtime-dependent.
 
 ## AI settings
 

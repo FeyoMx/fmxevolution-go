@@ -131,6 +131,20 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - lifecycle, backfill, and runtime snapshot failure paths now emit more operator-useful logs with tenant/instance context
 - repo-root temp utilities now use `//go:build ignore`, which removes them as blockers for `go test ./...`
 
+### QA data tooling
+
+- added `cmd/qa-seed` plus isolated `internal/qaseed` development tooling
+- QA seeding is disabled by default and requires `QA_SEED_ENABLED=true`
+- QA seeding refuses `APP_ENV=production` and `APP_ENV=prod`
+- the seed path is explicit CLI tooling only and is not wired into API startup
+- fixture data is tenant-scoped and deterministic so it can be rerun safely for local/manual QA
+- fixture coverage includes:
+  - 125 contacts
+  - dense and sparse instances
+  - mixed-status broadcast jobs and recipient progress rows
+  - dense conversation history across multiple chats
+  - runtime state plus lifecycle/history runtime events
+
 ## Why these changes were made
 
 - to move the fork toward practical Evolution Go / Manager parity without reviving unsafe global legacy routes
@@ -153,6 +167,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - broadcast recipient detail still does not join enriched CRM display names
 - richer receipt progression is still best-effort and runtime-dependent; recipients remain at `sent` when later receipt events are absent or cannot be safely matched
 - platform-wide tenant/user dashboard totals remain unsupported by the current tenant-scoped metrics endpoint
+- QA seed data is intentionally synthetic and development-only; it must not be used to imply production support for unsupported integrations or full durable WhatsApp chat parity
 
 ## Files changed in this wave
 
@@ -185,6 +200,8 @@ High-signal files updated for this phase include:
 - `internal/service/app.go`
 - `internal/tenant/handler.go`
 - `internal/tenant/service.go`
+- `internal/qaseed/seed.go`
+- `cmd/qa-seed/main.go`
 - `internal/webhook/service.go`
 - `internal/webhook/service_test.go`
 - `migrations/000001_saas_core.sql`
