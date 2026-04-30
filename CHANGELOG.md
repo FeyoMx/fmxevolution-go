@@ -118,10 +118,14 @@
 ### MVP hardening
 
 - Standardized supported-route validation and error responses around `{ error, message, code }`
+- Polished supported MVP validation copy for auth/session, tenant, instance, chat/history, send, CRM, broadcast, and AI handlers while preserving the shared error envelope
 - Hardened tenant create validation with trimmed inputs and a minimum admin password length
 - Hardened CRM phone validation to reject values that normalize to no digits
 - Hardened tenant AI settings to the currently supported `openai`-compatible provider surface
 - Hardened broadcast validation by rejecting negative pacing/retry values and clamping list limits
+- Hardened broadcast recipient pagination so omitted values use safe defaults while negative values return validation errors
+- Marked unsupported dashboard tenant/user platform totals as unsupported instead of returning placeholder-looking counts, and added explicit `metrics_limitations`
+- Added request ID context to chat-list bridge failure logs where available without increasing log volume
 - Added broadcast queue logging with tenant and instance context for operator troubleshooting
 - Added clearer lifecycle, backfill, and runtime snapshot failure logs with tenant and instance context
 

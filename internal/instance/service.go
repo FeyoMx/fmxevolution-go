@@ -993,7 +993,8 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 	if runtime == nil {
 		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), "bridge_unavailable"); ok {
 			if s.shouldLogNoisy(chatSearchStaleLogKey(tenantID, instance.ID, filter, "runtime_unavailable"), time.Now().UTC()) && s.logger != nil {
-				s.logger.Warn("search chats returning stale cache because runtime is unavailable", "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference, "error", ensureErr)
+				fields := appendRequestID(ctx, "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference, "error", ensureErr)
+				s.logger.Warn("search chats returning stale cache because runtime is unavailable", fields...)
 			}
 			return cached, instance, nil
 		}
@@ -1008,7 +1009,8 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 		err := fmt.Errorf("legacy runtime unavailable")
 		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), "bridge_unavailable"); ok {
 			if s.shouldLogNoisy(chatSearchStaleLogKey(tenantID, instance.ID, filter, "chat_runtime_unavailable"), time.Now().UTC()) && s.logger != nil {
-				s.logger.Warn("search chats returning stale cache because chat runtime is unavailable", "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference)
+				fields := appendRequestID(ctx, "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference)
+				s.logger.Warn("search chats returning stale cache because chat runtime is unavailable", fields...)
 			}
 			return cached, instance, nil
 		}
@@ -1020,23 +1022,14 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 		reason := staleReasonForChatSearchError(err)
 		if cached, ok := cache.stale(tenantID, instance.ID, filter, time.Now().UTC(), reason); ok {
 			if s.shouldLogNoisy(chatSearchStaleLogKey(tenantID, instance.ID, filter, reason), time.Now().UTC()) && s.logger != nil {
-				s.logger.Warn(
-					"search chats returning stale cache after live bridge failure",
-					"tenant_id", tenantID,
-					"instance_id", instance.ID,
-					"reference", reference,
-					"error", err,
-				)
+				fields := appendRequestID(ctx, "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference, "error", err)
+				s.logger.Warn("search chats returning stale cache after live bridge failure", fields...)
 			}
 			return cached, instance, nil
 		}
 		if s.logger != nil {
-			s.logger.Error(
-				"search chats failed",
-				"instance_id", instance.ID,
-				"reference", reference,
-				"error", err,
-			)
+			fields := appendRequestID(ctx, "tenant_id", tenantID, "instance_id", instance.ID, "reference", reference, "error", err)
+			s.logger.Error("search chats failed", fields...)
 		}
 		return nil, instance, normalizeChatSearchBridgeError(err)
 	}
@@ -1766,6 +1759,13 @@ func chatSearchStaleLogKey(tenantID, instanceID string, filter chatSearchFilter,
 		strings.ToLower(strings.TrimSpace(filter.Query)),
 		strings.TrimSpace(reason),
 	}, "\x00")
+}
+
+func appendRequestID(ctx context.Context, fields ...any) []any {
+	if requestID, ok := domain.RequestIDFromContext(ctx); ok {
+		return append(fields, "request_id", requestID)
+	}
+	return fields
 }
 
 func (s *Service) logLifecycleAction(action string, instance *repository.Instance, reference string) {

@@ -22,10 +22,7 @@ func (h *Handler) LegacySendText(c *gin.Context) {
 
 	var input SendTextInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "invalid legacy text payload",
-		})
+		sharedhandler.WriteValidationError(c, "invalid legacy text payload; number and text are required", err)
 		return
 	}
 
@@ -43,10 +40,7 @@ func (h *Handler) LegacySendMedia(c *gin.Context) {
 
 	var payload mediaMessageEnvelope
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "invalid legacy media payload",
-		})
+		sharedhandler.WriteValidationError(c, "invalid legacy media payload", err)
 		return
 	}
 
@@ -70,10 +64,7 @@ func (h *Handler) LegacySendAudio(c *gin.Context) {
 
 	var payload audioMessageEnvelope
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "invalid legacy audio payload",
-		})
+		sharedhandler.WriteValidationError(c, "invalid legacy audio payload", err)
 		return
 	}
 
@@ -95,7 +86,7 @@ func (h *Handler) LegacySendAudio(c *gin.Context) {
 func (h *Handler) LegacyFindChats(c *gin.Context) {
 	var input ChatSearchRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteError(c, err)
+		sharedhandler.WriteValidationError(c, "invalid legacy chat search payload", err)
 		return
 	}
 
@@ -112,10 +103,7 @@ func (h *Handler) LegacyFindChats(c *gin.Context) {
 func (h *Handler) LegacyFindMessages(c *gin.Context) {
 	var input MessageSearchRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   err.Error(),
-			"message": "invalid legacy message search payload",
-		})
+		sharedhandler.WriteValidationError(c, "invalid legacy message search payload", err)
 		return
 	}
 

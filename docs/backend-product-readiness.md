@@ -63,6 +63,8 @@ Readiness notes:
 - Broadcast recipient totals, attempted, sent, failed, and pending are now counted from durable recipient progress rows and explicitly flagged partial when some historical jobs have no recipient snapshot yet.
 - Broadcast recipient aggregates now also expose durable `delivered` and `read` counts when runtime receipt events can be safely matched back to recipient progress rows.
 - Runtime health counters are now exposed as healthy/degraded/unavailable/unknown buckets with a partial flag when some instances have no durable runtime state yet.
+- Tenant and user platform-wide totals are not exposed by this tenant-scoped MVP endpoint; the response marks those fields unsupported instead of returning placeholder counts.
+- The metrics payload now includes `metrics_limitations` so operator UIs can surface partial metric caveats without inventing dashboard copy.
 
 ### AI
 
@@ -170,6 +172,7 @@ Readiness notes:
 - Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
 - Repeated chat-list queries are safer for MVP operations: identical tenant+instance+filter requests use a 30-second fresh cache, a 5-second live-query throttle when cached data exists, and a 5-minute stale fallback when the bridge is unavailable or rate-limited.
 - Runtime/history/chat validation now fails more honestly for malformed backfill timestamps and other malformed operator payloads.
+- Chat-list bridge failure logs now include tenant, instance, and request context when available while still staying rate-limited.
 
 ### Instance event connectors and proxy
 
@@ -217,6 +220,7 @@ Readiness notes:
 
 - Queueing, tenant scoping, and worker claiming are implemented.
 - Broadcast create now rejects negative delay/rate/retry values, and broadcast list clamps `limit` to a bounded range.
+- Broadcast recipient pagination defaults remain operator-friendly (`page=1`, `limit=50`), but explicitly negative pagination values now fail with a validation envelope instead of being silently coerced.
 - Broadcast jobs now perform real WhatsApp text send attempts through the tenant-safe instance send path.
 - The current recipient source is the tenant CRM contact list, limited to contacts with no `instance_id` or a matching `instance_id`, and the recipient set is snapshotted into durable progress rows.
 - Jobs fail honestly when there are no eligible contacts or when the target runtime cannot send.

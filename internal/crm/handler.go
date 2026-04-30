@@ -39,7 +39,7 @@ func (h *Handler) GetContact(c *gin.Context) {
 func (h *Handler) CreateContact(c *gin.Context) {
 	var input CreateContactInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para contacto", err)
+		sharedhandler.WriteValidationError(c, "invalid contact payload; name and phone are required", err)
 		return
 	}
 
@@ -55,7 +55,7 @@ func (h *Handler) CreateContact(c *gin.Context) {
 func (h *Handler) UpdateContact(c *gin.Context) {
 	var input UpdateContactInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para actualización de contacto", err)
+		sharedhandler.WriteValidationError(c, "invalid contact update payload", err)
 		return
 	}
 
@@ -71,7 +71,7 @@ func (h *Handler) UpdateContact(c *gin.Context) {
 func (h *Handler) AddNote(c *gin.Context) {
 	var input CreateNoteInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para nota", err)
+		sharedhandler.WriteValidationError(c, "invalid note payload; body is required", err)
 		return
 	}
 
@@ -87,7 +87,7 @@ func (h *Handler) AddNote(c *gin.Context) {
 func (h *Handler) AssignTags(c *gin.Context) {
 	var input AssignTagsInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para tags", err)
+		sharedhandler.WriteValidationError(c, "invalid tags payload", err)
 		return
 	}
 

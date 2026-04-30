@@ -19,7 +19,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Create(c *gin.Context) {
 	var input CreateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para tenant", err)
+		sharedhandler.WriteValidationError(c, "invalid tenant payload; name and slug are required", err)
 		return
 	}
 

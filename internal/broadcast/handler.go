@@ -20,7 +20,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Create(c *gin.Context) {
 	var input CreateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para broadcast", err)
+		sharedhandler.WriteValidationError(c, "invalid broadcast payload; instance_id and message are required", err)
 		return
 	}
 
@@ -65,12 +65,12 @@ func (h *Handler) ListRecipients(c *gin.Context) {
 
 	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil {
-		sharedhandler.WriteValidationError(c, "query inválida para recipients de broadcast", err)
+		sharedhandler.WriteValidationError(c, "invalid broadcast recipients query; page must be a positive integer", err)
 		return
 	}
 	limit, err := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	if err != nil {
-		sharedhandler.WriteValidationError(c, "query inválida para recipients de broadcast", err)
+		sharedhandler.WriteValidationError(c, "invalid broadcast recipients query; limit must be a positive integer", err)
 		return
 	}
 

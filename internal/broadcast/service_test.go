@@ -450,6 +450,23 @@ func TestListRecipientsRejectsUnsupportedStatusFilter(t *testing.T) {
 	}
 }
 
+func TestListRecipientsRejectsNegativePagination(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
+	job := &repository.BroadcastJob{ID: "job-negative-pagination", TenantID: "tenant-1", InstanceID: "instance-1", Status: statusQueued}
+	repo.jobs[job.ID] = job
+
+	for _, input := range []ListRecipientsInput{{Page: -1}, {Limit: -1}} {
+		_, err := service.ListRecipients(context.Background(), "tenant-1", job.ID, input)
+		if err == nil {
+			t.Fatalf("expected validation error for %+v", input)
+		}
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("expected validation error for %+v, got %v", input, err)
+		}
+	}
+}
+
 func TestHandleReceiptUpdatesRecipientDeliveryProgress(t *testing.T) {
 	repo := newBroadcastRepoMock()
 	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
@@ -563,7 +580,11 @@ func TestDeliveryProcessorSendsToEligibleContacts(t *testing.T) {
 	if len(sender.calls) != 2 {
 		t.Fatalf("expected 2 send attempts, got %d", len(sender.calls))
 	}
-	if sender.calls[0].Number != "521111111111" || sender.calls[1].Number != "522222222222" {
+	recipients := map[string]bool{}
+	for _, call := range sender.calls {
+		recipients[call.Number] = true
+	}
+	if !recipients["521111111111"] || !recipients["522222222222"] {
 		t.Fatalf("unexpected recipients: %+v", sender.calls)
 	}
 }

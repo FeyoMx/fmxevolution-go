@@ -53,7 +53,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Create(c *gin.Context) {
 	input, err := decodeCreateInput(c)
 	if err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido; usa name o instanceName", err)
+		sharedhandler.WriteValidationError(c, "invalid instance payload; use name or instanceName", err)
 		return
 	}
 
@@ -127,7 +127,7 @@ func (h *Handler) UpdateAdvancedSettings(c *gin.Context) {
 
 	var settings legacyInstanceModel.AdvancedSettings
 	if err := c.ShouldBindJSON(&settings); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para advanced settings", err)
+		sharedhandler.WriteValidationError(c, "invalid advanced settings payload", err)
 		return
 	}
 
@@ -163,7 +163,7 @@ func (h *Handler) SendText(c *gin.Context) {
 
 	var input SendTextInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para envío de texto", err)
+		sharedhandler.WriteValidationError(c, "invalid text message payload; number and text are required", err)
 		return
 	}
 
@@ -488,7 +488,7 @@ func (h *Handler) BackfillHistory(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodeHistoryBackfillInput(c)
 	if err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para history backfill", err)
+		sharedhandler.WriteValidationError(c, "invalid history backfill payload", err)
 		return
 	}
 
@@ -505,7 +505,7 @@ func (h *Handler) BackfillHistoryByID(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodeHistoryBackfillInput(c)
 	if err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para history backfill", err)
+		sharedhandler.WriteValidationError(c, "invalid history backfill payload", err)
 		return
 	}
 
@@ -544,7 +544,7 @@ func (h *Handler) Pair(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodePairInput(c)
 	if err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para pairing", err)
+		sharedhandler.WriteValidationError(c, "invalid pairing payload; phone is required", err)
 		return
 	}
 
@@ -566,7 +566,7 @@ func (h *Handler) PairByID(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	input, err := decodePairInput(c)
 	if err != nil {
-		sharedhandler.WriteValidationError(c, "payload inválido para pairing", err)
+		sharedhandler.WriteValidationError(c, "invalid pairing payload; phone is required", err)
 		return
 	}
 

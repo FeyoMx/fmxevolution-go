@@ -80,7 +80,7 @@ func (h *Handler) GetProxyConfig(c *gin.Context) {
 func (h *Handler) SetProxyConfig(c *gin.Context) {
 	var input ProxyConfig
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		sharedhandler.WriteValidationError(c, "invalid proxy settings payload", err)
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *Handler) SetProxyConfig(c *gin.Context) {
 func (h *Handler) SearchChats(c *gin.Context) {
 	var input ChatSearchRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		sharedhandler.WriteValidationError(c, "invalid chat search payload", err)
 		return
 	}
 
@@ -114,7 +114,7 @@ func (h *Handler) SearchChats(c *gin.Context) {
 func (h *Handler) SearchMessages(c *gin.Context) {
 	var input MessageSearchRequest
 	if err := c.ShouldBindJSON(&input); err != nil {
-		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		sharedhandler.WriteValidationError(c, "invalid message search payload", err)
 		return
 	}
 
@@ -131,7 +131,7 @@ func (h *Handler) SearchMessages(c *gin.Context) {
 func (h *Handler) SendMediaMessage(c *gin.Context) {
 	var payload mediaMessageEnvelope
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		sharedhandler.WriteValidationError(c, "invalid media message payload", err)
 		return
 	}
 
@@ -154,7 +154,7 @@ func (h *Handler) SendMediaMessage(c *gin.Context) {
 func (h *Handler) SendAudioMessage(c *gin.Context) {
 	var payload audioMessageEnvelope
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		sharedhandler.WriteError(c, errors.Join(domain.ErrValidation, err))
+		sharedhandler.WriteValidationError(c, "invalid audio message payload", err)
 		return
 	}
 

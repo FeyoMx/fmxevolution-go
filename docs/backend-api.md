@@ -72,7 +72,7 @@ Notes:
 | Method | Path | Roles | Request body | Success response | Tenant scope |
 |---|---|---|---|---|---|
 | `GET` | `/auth/me` | owner, admin, agent | none | `{ user_id, tenant_id, email, role, api_key, api_key_auth }` | authenticated tenant |
-| `POST` | `/auth/logout` | owner, admin, agent | none | `{ "message": "logout exitoso", "accepted": true }` | stateless acknowledgement only |
+| `POST` | `/auth/logout` | owner, admin, agent | none | `{ "message": "logout accepted", "accepted": true }` | stateless acknowledgement only |
 
 ## Tenant
 
@@ -95,6 +95,8 @@ Notes:
 - broadcast recipient aggregates are exposed through `broadcast_recipients_total`, `broadcast_recipients_attempted`, `broadcast_recipients_sent`, `broadcast_recipients_failed`, `broadcast_recipients_pending`, and `broadcast_recipients_partial`
 - richer broadcast receipt aggregates are exposed through `broadcast_recipients_delivered` and `broadcast_recipients_read` when durable runtime receipt updates have been observed
 - runtime health is exposed through `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
+- platform-wide `tenants_total` and `users_total` are intentionally returned as `null` with `*_supported: false`; the MVP dashboard endpoint is tenant-scoped and does not claim global platform totals
+- `metrics_limitations` lists the current partial/unsupported metric categories in machine-readable form for operator UI copy
 
 ## AI
 
@@ -415,7 +417,7 @@ Rate limiting:
 
 - `POST /broadcast` is wrapped by the broadcast limiter
 - `GET /broadcast` clamps `limit` to a safe range of `1..200`
-- `GET /broadcast/:id/recipients` defaults to `page=1` and `limit=50`, clamps `limit` to `1..200`, and rejects unsupported `status` values
+- `GET /broadcast/:id/recipients` defaults to `page=1` and `limit=50`, rejects negative pagination values, clamps `limit` to `1..200`, and rejects unsupported `status` values
 - `POST /broadcast` rejects negative `delay_sec`, `rate_per_hour`, and `max_attempts`
 - `POST /broadcast` rejects `scheduled_at` values that are already in the past
 

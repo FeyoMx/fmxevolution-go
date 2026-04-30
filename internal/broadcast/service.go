@@ -623,10 +623,16 @@ func normalizeRecipientListFilter(input ListRecipientsInput) (repository.Broadca
 		Limit: input.Limit,
 	}
 
-	if filter.Page <= 0 {
+	if filter.Page < 0 {
+		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: page must be greater than zero", domain.ErrValidation)
+	}
+	if filter.Page == 0 {
 		filter.Page = 1
 	}
-	if filter.Limit <= 0 {
+	if filter.Limit < 0 {
+		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: limit must be greater than zero", domain.ErrValidation)
+	}
+	if filter.Limit == 0 {
 		filter.Limit = 50
 	}
 	if filter.Limit > 200 {

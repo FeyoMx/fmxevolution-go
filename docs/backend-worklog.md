@@ -123,6 +123,11 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - dashboard metrics now also expose broadcast recipient totals, attempted, sent, failed, pending, and a partial flag for older untracked jobs
 - dashboard runtime metrics now expose `runtime_healthy`, `runtime_degraded`, `runtime_unavailable`, `runtime_unknown`, and `runtime_health_partial`
 - `messages_total` is explicitly marked partial because it reflects the tenant-scoped SaaS message-history store, not universal WhatsApp history
+- dashboard tenant/user platform totals are now marked unsupported instead of returning placeholder-looking values from a tenant-scoped endpoint
+- dashboard responses include `metrics_limitations` for explicit operator-facing caveats
+- supported MVP handlers now use English validation messages while preserving the shared `{ error, message, code }` envelope
+- broadcast recipient listing now rejects negative pagination values and keeps documented defaults for omitted page/limit
+- chat-list bridge failure logs include request ID when present, in addition to tenant and instance context
 - lifecycle, backfill, and runtime snapshot failure paths now emit more operator-useful logs with tenant/instance context
 - repo-root temp utilities now use `//go:build ignore`, which removes them as blockers for `go test ./...`
 
@@ -147,6 +152,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - repo-wide `go test ./...` is still blocked by legacy `github.com/chai2010/webp` build failures outside the SaaS sprint slice
 - broadcast recipient detail still does not join enriched CRM display names
 - richer receipt progression is still best-effort and runtime-dependent; recipients remain at `sent` when later receipt events are absent or cannot be safely matched
+- platform-wide tenant/user dashboard totals remain unsupported by the current tenant-scoped metrics endpoint
 
 ## Files changed in this wave
 
