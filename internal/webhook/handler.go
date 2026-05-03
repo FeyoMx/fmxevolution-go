@@ -21,7 +21,7 @@ type Handler struct {
 
 type legacyInstanceService interface {
 	Resolve(ctx context.Context, tenantID, reference string) (*repository.Instance, error)
-	SetWebhook(ctx context.Context, tenantID, reference, webhookURL string, events []string) (*repository.Instance, error)
+	SetWebhook(ctx context.Context, tenantID, reference, webhookURL string, events []string, base64 bool, byEvents bool) (*repository.Instance, error)
 }
 
 type legacyWebhookPayload struct {
@@ -105,13 +105,23 @@ func (h *Handler) handleLegacyInstanceWebhookList(c *gin.Context) bool {
 	}
 
 	webhookURL := strings.TrimSpace(instance.WebhookURL)
+	storedEvents := []string{}
+	if instance.WebhookEvents != "" {
+		for _, e := range strings.Split(instance.WebhookEvents, ",") {
+			if t := strings.TrimSpace(e); t != "" {
+				storedEvents = append(storedEvents, t)
+			}
+		}
+	}
 	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{
-		"enabled":      webhookURL != "",
-		"instanceName": instance.Name,
-		"url":          webhookURL,
-		"webhook":      webhookURL,
-		"webhook_url":  webhookURL,
-		"events":       []string{},
+		"enabled":         webhookURL != "",
+		"instanceName":    instance.Name,
+		"url":             webhookURL,
+		"webhook":         webhookURL,
+		"webhook_url":     webhookURL,
+		"events":          storedEvents,
+		"webhookBase64":   instance.WebhookBase64,
+		"webhookByEvents": instance.WebhookByEvents,
 	})
 	return true
 }
@@ -200,8 +210,15 @@ func (h *Handler) handleLegacyInstanceWebhookCreate(c *gin.Context) bool {
 
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
 	normalizedEvents := normalizeLegacyWebhookEvents(payload.Events, rawPayload["events"])
+	// Also check nested webhook.events if top-level events were empty
+	if len(normalizedEvents) == 0 {
+		if nested, ok := rawPayload["webhook"].(map[string]any); ok {
+			normalizedEvents = normalizeLegacyWebhookEvents(nil, nested["events"])
+		}
+	}
 
-	instance, err := h.instanceService.SetWebhook(c.Request.Context(), identity.TenantID, reference, webhookURL, normalizedEvents)
+	normalizedBase64, normalizedByEvents := normalizeLegacyWebhookFlags(payload, rawPayload)
+	instance, err := h.instanceService.SetWebhook(c.Request.Context(), identity.TenantID, reference, webhookURL, normalizedEvents, normalizedBase64, normalizedByEvents)
 	if err != nil {
 		h.service.logger.Warn("legacy webhook update rejected", "tenant_id", identity.TenantID, "reference", reference, "webhook_url", webhookURL, "body", string(body), "error", err.Error())
 		sharedhandler.WriteError(c, err)
@@ -211,14 +228,16 @@ func (h *Handler) handleLegacyInstanceWebhookCreate(c *gin.Context) bool {
 	h.service.logger.Info("legacy webhook updated", "tenant_id", identity.TenantID, "reference", reference, "webhook_url", instance.WebhookURL)
 
 	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{
-		"message":      "webhook updated",
-		"instance_id":  instance.ID,
-		"instanceName": instance.Name,
-		"url":          instance.WebhookURL,
-		"webhook":      instance.WebhookURL,
-		"webhook_url":  instance.WebhookURL,
-		"enabled":      strings.TrimSpace(instance.WebhookURL) != "",
-		"events":       normalizedEvents,
+		"message":         "webhook updated",
+		"instance_id":     instance.ID,
+		"instanceName":    instance.Name,
+		"url":             instance.WebhookURL,
+		"webhook":         instance.WebhookURL,
+		"webhook_url":     instance.WebhookURL,
+		"enabled":         strings.TrimSpace(instance.WebhookURL) != "",
+		"events":          normalizedEvents,
+		"webhookBase64":   normalizedBase64,
+		"webhookByEvents": normalizedByEvents,
 	})
 	return true
 }
@@ -300,17 +319,13 @@ func normalizeLegacyWebhookEvents(rawJSON json.RawMessage, rawValue any) []strin
 	normalized := make([]string, 0, len(values))
 	seen := make(map[string]struct{})
 	for _, value := range values {
-		switch strings.ToUpper(strings.TrimSpace(value)) {
-		case "MESSAGES_UPSERT", "MESSAGE", "MESSAGES":
-			if _, ok := seen["MESSAGE"]; !ok {
-				normalized = append(normalized, "MESSAGE")
-				seen["MESSAGE"] = struct{}{}
-			}
-		case "ALL":
-			if _, ok := seen["ALL"]; !ok {
-				normalized = append(normalized, "ALL")
-				seen["ALL"] = struct{}{}
-			}
+		v := strings.TrimSpace(value)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; !ok {
+			normalized = append(normalized, v)
+			seen[v] = struct{}{}
 		}
 	}
 
@@ -397,3 +412,22 @@ func (h *Handler) dispatch(c *gin.Context, direction string) {
 		"results":   results,
 	})
 }
+
+func normalizeLegacyWebhookFlags(payload legacyWebhookPayload, raw map[string]any) (base64 bool, byEvents bool) {
+	if payload.Webhook != nil {
+		var nested struct {
+			Base64   bool `json:"base64"`
+			ByEvents bool `json:"byEvents"`
+		}
+		if err := json.Unmarshal(payload.Webhook, &nested); err == nil {
+			return nested.Base64, nested.ByEvents
+		}
+	}
+	if w, ok := raw["webhook"].(map[string]any); ok {
+		b64, _ := w["base64"].(bool)
+		byEv, _ := w["byEvents"].(bool)
+		return b64, byEv
+	}
+	return false, false
+}
+

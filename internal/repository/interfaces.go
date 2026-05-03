@@ -42,6 +42,7 @@ type ConversationMessageRepository interface {
 	List(ctx context.Context, tenantID, instanceID string, filter ConversationMessageFilter) ([]ConversationMessage, error)
 	CountByTenant(ctx context.Context, tenantID string) (int64, error)
 	MarkReceipt(ctx context.Context, instanceID, externalMessageID, state string, at time.Time) error
+	ListGroups(ctx context.Context, instanceID string) ([]GroupSummary, error)
 }
 
 type RuntimeSessionEventFilter struct {

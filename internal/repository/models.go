@@ -40,7 +40,10 @@ type Instance struct {
 	Name             string    `json:"name" gorm:"size:255;not null"`
 	Status           string    `json:"status" gorm:"size:50;not null;default:'created'"`
 	EngineInstanceID string    `json:"engine_instance_id" gorm:"size:255"`
-	WebhookURL       string    `json:"webhook_url" gorm:"size:500"`
+	WebhookURL      string    `json:"webhook_url" gorm:"size:500"`
+	WebhookEvents   string    `json:"webhook_events" gorm:"type:text;default:''"`
+	WebhookBase64   bool      `json:"webhook_base64" gorm:"not null;default:false"`
+	WebhookByEvents bool      `json:"webhook_by_events" gorm:"not null;default:false"`
 	AIEnabled        bool      `json:"ai_enabled" gorm:"not null;default:false"`
 	AIAutoReply      bool      `json:"ai_auto_reply" gorm:"not null;default:false"`
 	CreatedAt        time.Time `json:"created_at"`

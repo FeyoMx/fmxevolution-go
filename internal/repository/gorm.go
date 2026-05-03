@@ -363,6 +363,30 @@ func (r *gormConversationMessageRepository) MarkReceipt(ctx context.Context, ins
 		Updates(updates).Error
 }
 
+// GroupSummary holds aggregated data for a WhatsApp group.
+type GroupSummary struct {
+	RemoteJID    string    `gorm:"column:remote_jid"`
+	PushName     string    `gorm:"column:push_name"`
+	MessageCount int64     `gorm:"column:message_count"`
+	LastMessage  time.Time `gorm:"column:last_message"`
+}
+
+func (r *gormConversationMessageRepository) ListGroups(ctx context.Context, instanceID string) ([]GroupSummary, error) {
+	var out []GroupSummary
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT remote_jid, push_name, COUNT(*) AS message_count, MAX(message_timestamp) AS last_message
+		 FROM conversation_messages
+		 WHERE instance_id = ? AND remote_jid LIKE '%@g.us'
+		 GROUP BY remote_jid, push_name
+		 ORDER BY last_message DESC`,
+		instanceID,
+	).Scan(&out).Error
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *gormRuntimeObservabilityRepository) UpsertState(ctx context.Context, state *RuntimeSessionState) error {
 	if state == nil {
 		return nil

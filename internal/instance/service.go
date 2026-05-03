@@ -691,13 +691,16 @@ func (s *Service) resolveHistoryBackfillRequest(ctx context.Context, instance *r
 	return request, "stored_history", nil
 }
 
-func (s *Service) SetWebhook(ctx context.Context, tenantID, reference, webhookURL string, events []string) (*repository.Instance, error) {
+func (s *Service) SetWebhook(ctx context.Context, tenantID, reference, webhookURL string, events []string, base64 bool, byEvents bool) (*repository.Instance, error) {
 	instance, err := s.resolve(ctx, tenantID, reference)
 	if err != nil {
 		return nil, err
 	}
 
 	instance.WebhookURL = strings.TrimSpace(webhookURL)
+	instance.WebhookEvents = strings.Join(events, ",")
+	instance.WebhookBase64 = base64
+	instance.WebhookByEvents = byEvents
 	if err := s.repo.Update(ctx, instance); err != nil {
 		return nil, err
 	}
@@ -1883,3 +1886,9 @@ func (s *Service) storeSendTextJob(tenantID string, status SendTextJobStatus) {
 func (s *Service) loadSendTextJob(tenantID, jobID string) (SendTextJobStatus, bool) {
 	return sendstatus.Load(tenantID, jobID)
 }
+
+// FetchGroups returns all WhatsApp group chats for the given instance.
+func (s *Service) FetchGroups(ctx context.Context, instanceID string) ([]repository.GroupSummary, error) {
+	return s.history.ListGroups(ctx, instanceID)
+}
+
