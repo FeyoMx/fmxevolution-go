@@ -245,7 +245,7 @@ func (s *Service) Create(ctx context.Context, tenantID string, input CreateInput
 	if err := s.enrichJob(ctx, job, false); err != nil {
 		return nil, err
 	}
-	fields := appendBroadcastRequestID(ctx, "tenant_id", tenantID, "instance_id", input.InstanceID, "message_length", len(input.Message), "available_at", availableAt)
+	fields := appendBroadcastRequestID(ctx, "broadcast_id", job.ID, "tenant_id", tenantID, "instance_id", input.InstanceID, "message_length", len(input.Message), "available_at", availableAt)
 	s.logger.Info("broadcast job queued", fields...)
 	return job, nil
 }
@@ -383,7 +383,7 @@ func (s *Service) tryEnqueue(job repository.BroadcastJob) {
 	select {
 	case s.queue <- job:
 	default:
-		s.logger.Warn("broadcast queue buffer full", "job_id", job.ID, "tenant_id", job.TenantID)
+		s.logger.Warn("broadcast queue buffer full", "broadcast_id", job.ID, "job_id", job.ID, "tenant_id", job.TenantID)
 	}
 }
 
@@ -403,6 +403,7 @@ func (s *Service) handleJob(ctx context.Context, workerID string, job repository
 	s.logger.Info(
 		"broadcast job processing",
 		"worker_id", workerID,
+		"broadcast_id", job.ID,
 		"job_id", job.ID,
 		"tenant_id", job.TenantID,
 		"instance_id", job.InstanceID,
@@ -425,24 +426,24 @@ func (s *Service) handleJob(ctx context.Context, workerID string, job repository
 	completedAt := time.Now().UTC()
 	summary, err := s.repo.SummarizeRecipientProgress(ctx, job.TenantID, job.ID)
 	if err != nil {
-		s.logger.Error("summarize broadcast recipient progress", "worker_id", workerID, "job_id", job.ID, "error", err)
+		s.logger.Error("summarize broadcast recipient progress", "worker_id", workerID, "broadcast_id", job.ID, "job_id", job.ID, "error", err)
 		return
 	}
 	if summary.Failed > 0 {
 		message := fmt.Sprintf("broadcast completed with %d sent and %d failed recipients", summary.Sent, summary.Failed)
 		if err := s.repo.MarkCompletedWithFailures(ctx, job.TenantID, job.ID, message, completedAt); err != nil {
-			s.logger.Error("mark broadcast completed with failures", "worker_id", workerID, "job_id", job.ID, "error", err)
+			s.logger.Error("mark broadcast completed with failures", "worker_id", workerID, "broadcast_id", job.ID, "job_id", job.ID, "error", err)
 			return
 		}
-		s.logger.Warn("broadcast job completed with failures", "worker_id", workerID, "job_id", job.ID, "tenant_id", job.TenantID, "instance_id", job.InstanceID, "sent", summary.Sent, "failed", summary.Failed)
+		s.logger.Warn("broadcast job completed with failures", "worker_id", workerID, "broadcast_id", job.ID, "job_id", job.ID, "tenant_id", job.TenantID, "instance_id", job.InstanceID, "sent", summary.Sent, "failed", summary.Failed)
 		return
 	}
 	if err := s.repo.MarkCompleted(ctx, job.TenantID, job.ID, completedAt); err != nil {
-		s.logger.Error("mark broadcast completed", "worker_id", workerID, "job_id", job.ID, "error", err)
+		s.logger.Error("mark broadcast completed", "worker_id", workerID, "broadcast_id", job.ID, "job_id", job.ID, "error", err)
 		return
 	}
 
-	s.logger.Info("broadcast job completed", "worker_id", workerID, "job_id", job.ID, "tenant_id", job.TenantID, "instance_id", job.InstanceID)
+	s.logger.Info("broadcast job completed", "worker_id", workerID, "broadcast_id", job.ID, "job_id", job.ID, "tenant_id", job.TenantID, "instance_id", job.InstanceID)
 }
 
 func (s *Service) handleFailure(ctx context.Context, workerID string, job repository.BroadcastJob, err error) {
@@ -454,12 +455,13 @@ func (s *Service) handleFailure(ctx context.Context, workerID string, job reposi
 	}
 
 	if markErr := s.repo.MarkFailed(ctx, job.TenantID, job.ID, err.Error(), now, retryAt); markErr != nil {
-		s.logger.Error("mark broadcast failed", "worker_id", workerID, "job_id", job.ID, "error", markErr)
+		s.logger.Error("mark broadcast failed", "worker_id", workerID, "broadcast_id", job.ID, "job_id", job.ID, "error", markErr)
 		return
 	}
 
 	fields := []any{
 		"worker_id", workerID,
+		"broadcast_id", job.ID,
 		"job_id", job.ID,
 		"tenant_id", job.TenantID,
 		"instance_id", job.InstanceID,

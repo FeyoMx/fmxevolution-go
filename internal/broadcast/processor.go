@@ -63,6 +63,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		if p.logger != nil {
 			p.logger.Info(
 				"broadcast resume found no pending recipients",
+				"broadcast_id", job.ID,
 				"job_id", job.ID,
 				"tenant_id", job.TenantID,
 				"instance_id", job.InstanceID,
@@ -98,6 +99,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		if p.logger != nil {
 			p.logger.Debug(
 				"broadcast recipient send attempt",
+				"broadcast_id", job.ID,
 				"job_id", job.ID,
 				"tenant_id", job.TenantID,
 				"instance_id", job.InstanceID,
@@ -118,6 +120,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 			if p.logger != nil {
 				p.logger.Warn(
 					"broadcast recipient send failed",
+					"broadcast_id", job.ID,
 					"job_id", job.ID,
 					"tenant_id", job.TenantID,
 					"instance_id", job.InstanceID,
@@ -153,6 +156,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 			if p.logger != nil {
 				p.logger.Warn(
 					"broadcast recipient send returned no delivery evidence",
+					"broadcast_id", job.ID,
 					"job_id", job.ID,
 					"tenant_id", job.TenantID,
 					"instance_id", job.InstanceID,
@@ -188,6 +192,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		if p.logger != nil {
 			p.logger.Debug(
 				"broadcast recipient delivered",
+				"broadcast_id", job.ID,
 				"job_id", job.ID,
 				"tenant_id", job.TenantID,
 				"instance_id", job.InstanceID,
@@ -204,6 +209,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		if summaryErr == nil {
 			p.logger.Info(
 				"broadcast delivery completed",
+				"broadcast_id", job.ID,
 				"job_id", job.ID,
 				"tenant_id", job.TenantID,
 				"instance_id", job.InstanceID,
@@ -216,6 +222,7 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		}
 		p.logger.Info(
 			"broadcast delivery completed",
+			"broadcast_id", job.ID,
 			"job_id", job.ID,
 			"tenant_id", job.TenantID,
 			"instance_id", job.InstanceID,

@@ -36,6 +36,7 @@
 - Added best-effort recipient-level `delivered` and `read` progression for broadcasts when runtime receipt events can be safely matched back by durable `instance_id + message_id`
 - Added durable recipient receipt metadata fields including `delivered_at`, `read_at`, `last_status_at`, and `status_source`
 - Extended broadcast and dashboard recipient analytics so `sent` remains inclusive of later receipt states while `delivered` and `read` are also exposed separately
+- Added `broadcast_id` to broadcast operational logs where relevant while retaining `job_id` compatibility for existing log searches
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
 - Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
 - Normalized bridge-unavailable lifecycle failures so reconnect, pair, and logout now return conflict-style operator errors instead of generic internal errors
@@ -104,6 +105,7 @@
 - Added `/livez` and `/readyz` alongside `/healthz`, with `/readyz` checking database connectivity
 - Added graceful background worker stop handling during SIGINT/SIGTERM shutdown
 - Added `docs/deployment.md` with VPS/container run instructions, health checks, environment variables, and troubleshooting
+- Added `docs/pilot-operations.md` with pilot support commands for health checks, log tailing, runtime status/history, broadcast recipient progress, failed-send diagnosis, safe restarts, database connectivity, and operational SQL snippets
 
 ### Known partial areas
 

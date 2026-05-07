@@ -1,6 +1,6 @@
 # Backend Product Readiness
 
-Audited on 2026-04-06.
+Audited on 2026-04-06. Pilot operations pass updated on 2026-05-07.
 
 This summary reflects the backend mounted by `cmd/api` and `internal/server/server.go`, compared against the bundled upstream-style legacy surface still present under `pkg/*` and the current sibling frontend repo. The backend is product-usable for tenant auth, tenant-scoped instance lifecycle, durable runtime observability, webhook dispatch, CRM, text sending, media sending, audio sending, a live chat list, tenant-safe message-history search, and limited replay/backfill ingestion. It is not yet full Evolution Go / Manager parity because several manager integration pages, some runtime/admin surfaces, and full upstream chat-history replay remain partial or unsupported.
 
@@ -19,6 +19,7 @@ Strong areas:
 - CRM contacts/tags/notes
 - shared error DTOs plus clearer operator-facing runtime/backfill responses across the supported MVP routes
 - deployment startup checks for required environment, configurable JSON log levels, health/readiness endpoints, and graceful SIGINT/SIGTERM shutdown
+- pilot support runbook coverage for health checks, log tailing, runtime status/history, broadcast recipient progress, failed-send diagnosis, safe restart, database connectivity, and operational SQL
 
 Main gaps:
 
@@ -152,6 +153,31 @@ Readiness notes:
 - Bridge-unavailable failures are now more consistent for operators: reconnect, pair, logout, and history backfill report `409 conflict` instead of leaking a generic `500` when the SaaS layer cannot reach the live bridge.
 - Rate-limited requests now return an explicit `429`/`rate_limited` response instead of a generic conflict or internal error.
 - Request logs include request ID, tenant ID, and route-derived instance ID when applicable; chat, backfill, and broadcast operational logs include request ID when a request context is available.
+- Pilot support logging remains intentionally bounded: HTTP logs include `request_id`, `tenant_id`, and route-derived `instance_id`; broadcast operational logs include `tenant_id`, `instance_id`, and `broadcast_id` where relevant without adding new high-volume log points.
+
+## Pilot Operations
+
+Operational runbook:
+
+- `docs/pilot-operations.md`
+
+Pilot support coverage:
+
+- service health: `/livez`, `/healthz`, and DB-backed `/readyz`
+- log tailing: systemd, Docker, and current local/VPS `api*.log` workflows
+- runtime troubleshooting: authenticated runtime status and runtime history routes
+- broadcast troubleshooting: job summary plus paginated recipient progress, failed-recipient filtering, and phone search
+- failed-send diagnosis: correlation by `request_id`, `tenant_id`, `instance_id`, `broadcast_id`, runtime state/history, recipient `last_error`, and logs
+- safe restart: graceful `SIGTERM`/process-manager restart guidance plus post-restart verification
+- database connectivity: API readiness, direct `psql` check, connection-pressure query, and SQL snippets for tenants, users, instances, runtime events, broadcast jobs, failed recipients, and webhook failures
+
+Remaining pilot support risks:
+
+- live runtime actions and snapshots still depend on the legacy bridge
+- delivered/read broadcast progression remains best-effort and receipt-dependent
+- older broadcasts that predate recipient snapshots can still show partial analytics
+- chat history is SaaS-observed and not a complete WhatsApp archive
+- in-memory rate limiting is not shared across multiple API replicas
 
 ### Messaging
 
