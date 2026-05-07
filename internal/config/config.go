@@ -4,21 +4,23 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
 type HTTPConfig struct {
 	Address         string
+	Port            string
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	ShutdownTimeout time.Duration
 }
 
 type DatabaseConfig struct {
-	URL            string
-	MaxOpenConns   int
-	MaxIdleConns   int
+	URL             string
+	MaxOpenConns    int
+	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 }
 
@@ -29,29 +31,30 @@ type AuthConfig struct {
 }
 
 type BroadcastConfig struct {
-	Workers       int
+	Workers        int
 	QueueBatchSize int
-	RatePerSecond int
+	RatePerSecond  int
 }
 
 type RateLimitConfig struct {
-	Backend                 string
-	MessagesPerMinute       int
-	BroadcastPerHour        int
-	WebhookCallsPerMinute   int
+	Backend               string
+	MessagesPerMinute     int
+	BroadcastPerHour      int
+	WebhookCallsPerMinute int
 }
 
 type AIConfig struct {
-	OpenAIAPIKey  string
-	BaseURL       string
-	Model         string
-	Timeout       time.Duration
-	Workers       int
-	MemoryLimit   int
+	OpenAIAPIKey string
+	BaseURL      string
+	Model        string
+	Timeout      time.Duration
+	Workers      int
+	MemoryLimit  int
 }
 
 type Config struct {
 	AppEnv    string
+	LogLevel  string
 	HTTP      HTTPConfig
 	Database  DatabaseConfig
 	Auth      AuthConfig
@@ -69,9 +72,11 @@ var (
 func Load() (*Config, error) {
 	loadOnce.Do(func() {
 		cfg := &Config{
-			AppEnv: getEnv("APP_ENV", "development"),
+			AppEnv:   getEnv("APP_ENV", "development"),
+			LogLevel: strings.ToLower(strings.TrimSpace(getEnv("LOG_LEVEL", ""))),
 			HTTP: HTTPConfig{
-				Address:         getEnv("HTTP_ADDRESS", ":8080"),
+				Address:         strings.TrimSpace(getEnv("HTTP_ADDRESS", "")),
+				Port:            strings.TrimSpace(getEnv("PORT", "")),
 				ReadTimeout:     getDuration("HTTP_READ_TIMEOUT", 15*time.Second),
 				WriteTimeout:    getDuration("HTTP_WRITE_TIMEOUT", 15*time.Second),
 				ShutdownTimeout: getDuration("HTTP_SHUTDOWN_TIMEOUT", 20*time.Second),
@@ -108,13 +113,22 @@ func Load() (*Config, error) {
 			},
 		}
 
-		if cfg.Database.URL == "" {
-			loadErr = fmt.Errorf("DATABASE_URL is required")
-			return
+		if cfg.LogLevel == "" {
+			if cfg.AppEnv == "development" {
+				cfg.LogLevel = "debug"
+			} else {
+				cfg.LogLevel = "info"
+			}
+		}
+		if cfg.HTTP.Port != "" {
+			cfg.HTTP.Address = ":" + cfg.HTTP.Port
+		}
+		if cfg.HTTP.Address == "" && cfg.AppEnv == "development" {
+			cfg.HTTP.Address = ":8080"
 		}
 
-		if cfg.Auth.JWTSecret == "" {
-			loadErr = fmt.Errorf("JWT_SECRET is required")
+		if err := cfg.Validate(); err != nil {
+			loadErr = err
 			return
 		}
 
@@ -122,6 +136,41 @@ func Load() (*Config, error) {
 	})
 
 	return cached, loadErr
+}
+
+func (c *Config) Validate() error {
+	var missing []string
+	if strings.TrimSpace(c.Database.URL) == "" {
+		missing = append(missing, "DATABASE_URL")
+	}
+	if strings.TrimSpace(c.Auth.JWTSecret) == "" {
+		missing = append(missing, "JWT_SECRET")
+	}
+	if strings.TrimSpace(c.HTTP.Port) == "" && strings.TrimSpace(c.HTTP.Address) == "" {
+		missing = append(missing, "PORT or HTTP_ADDRESS")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+
+	if strings.TrimSpace(c.HTTP.Port) != "" {
+		port, err := strconv.Atoi(c.HTTP.Port)
+		if err != nil || port <= 0 || port > 65535 {
+			return fmt.Errorf("PORT must be an integer between 1 and 65535")
+		}
+	}
+
+	switch c.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("LOG_LEVEL must be one of: debug, info, warn, error")
+	}
+
+	if strings.EqualFold(strings.TrimSpace(c.AppEnv), "production") && len(c.Auth.JWTSecret) < 32 {
+		return fmt.Errorf("JWT_SECRET must be at least 32 characters when APP_ENV=production")
+	}
+
+	return nil
 }
 
 func getEnv(key, fallback string) string {

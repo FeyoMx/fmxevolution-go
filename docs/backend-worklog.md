@@ -11,6 +11,9 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - `cmd/api/main.go` runs the tenant-aware backend
 - `internal/*` contains auth, tenancy, instances, CRM, webhooks, AI, broadcast, middleware, repositories, and server wiring
 - `migrations/000001_saas_core.sql` exists as the SQL baseline
+- production startup now validates `DATABASE_URL`, `JWT_SECRET`, `PORT`/`HTTP_ADDRESS`, and `LOG_LEVEL` before opening runtime services
+- API deployment now prefers `PORT` while keeping `HTTP_ADDRESS` compatibility, exposes `/healthz`, `/livez`, and `/readyz`, and handles SIGINT/SIGTERM with graceful HTTP, worker, and database shutdown
+- structured logging level is configurable with `LOG_LEVEL=debug|info|warn|error`
 
 ### Auth and tenancy
 
@@ -127,6 +130,14 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - dashboard responses include `metrics_limitations` for explicit operator-facing caveats
 - supported MVP handlers now use English validation messages while preserving the shared `{ error, message, code }` envelope
 - broadcast recipient listing now rejects negative pagination values and keeps documented defaults for omitted page/limit
+- broadcast recipient listing now rejects excessive page depth, caps page size at 200, and caps recipient search text at 100 characters
+- chat search and message search now reject oversized query strings before reaching live bridge or database paths
+- message search remains tenant+instance+remoteJid scoped and caps result size at 250 to avoid unbounded history reads
+- lightweight in-memory rate protection is now applied to chat search, message search, legacy find routes, and broadcast read/write/detail routes
+- route rate-limit responses now return an explicit `429` payload with `code: rate_limited` and `Retry-After`
+- broadcast workers and processors now check context cancellation before pacing waits, recipient loops, seed loops, and downstream send attempts
+- backfill and search service paths now check request cancellation before long-running bridge/database work where practical
+- request logs now include request ID, tenant ID, and route-derived instance ID when applicable
 - chat-list bridge failure logs include request ID when present, in addition to tenant and instance context
 - lifecycle, backfill, and runtime snapshot failure paths now emit more operator-useful logs with tenant/instance context
 - repo-root temp utilities now use `//go:build ignore`, which removes them as blockers for `go test ./...`

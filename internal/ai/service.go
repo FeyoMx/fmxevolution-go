@@ -39,6 +39,7 @@ type Service struct {
 	dispatcher outboundDispatcher
 	queue      chan job
 	once       sync.Once
+	wg         sync.WaitGroup
 }
 
 type TenantSettingsInput struct {
@@ -138,9 +139,28 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	s.once.Do(func() {
 		for i := 0; i < workers; i++ {
-			go s.worker(ctx, i+1)
+			s.wg.Add(1)
+			go func(workerID int) {
+				defer s.wg.Done()
+				s.worker(ctx, workerID)
+			}(i + 1)
 		}
 	})
+}
+
+func (s *Service) Stop(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
 }
 
 func (s *Service) ConfigureTenant(ctx context.Context, tenantID string, input TenantSettingsInput) (*repository.AISettings, error) {

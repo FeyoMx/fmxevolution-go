@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -49,9 +50,18 @@ func WriteError(c *gin.Context, err error) {
 	case errors.Is(err, domain.ErrValidation):
 		status = http.StatusBadRequest
 		code = "validation_failed"
+	case errors.Is(err, domain.ErrRateLimited):
+		status = http.StatusTooManyRequests
+		code = "rate_limited"
 	case errors.Is(err, domain.ErrTimeout):
 		status = http.StatusGatewayTimeout
 		code = "timeout"
+	case errors.Is(err, context.DeadlineExceeded):
+		status = http.StatusGatewayTimeout
+		code = "timeout"
+	case errors.Is(err, context.Canceled):
+		status = http.StatusRequestTimeout
+		code = "request_cancelled"
 	}
 
 	c.JSON(status, ErrorResponse{

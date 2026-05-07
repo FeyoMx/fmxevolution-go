@@ -15,6 +15,9 @@ import (
 const (
 	defaultMessageSearchLimit = 100
 	maxMessageSearchLimit     = 250
+	maxMessageSearchQueryLen  = 100
+	maxMessageSearchJIDLen    = 255
+	maxMessageSearchIDLen     = 255
 )
 
 type MessageSearchRequest struct {
@@ -80,6 +83,15 @@ func normalizeMessageSearchRequest(input MessageSearchRequest) (messageSearchFil
 			stringValue(input.Where["text"]),
 		),
 	)
+	if len(filter.RemoteJID) > maxMessageSearchJIDLen {
+		return messageSearchFilter{}, fmt.Errorf("%w: remoteJid cannot exceed %d characters", domain.ErrValidation, maxMessageSearchJIDLen)
+	}
+	if len(filter.MessageID) > maxMessageSearchIDLen {
+		return messageSearchFilter{}, fmt.Errorf("%w: message id cannot exceed %d characters", domain.ErrValidation, maxMessageSearchIDLen)
+	}
+	if len(filter.Query) > maxMessageSearchQueryLen {
+		return messageSearchFilter{}, fmt.Errorf("%w: message search query cannot exceed %d characters", domain.ErrValidation, maxMessageSearchQueryLen)
+	}
 
 	beforeRaw := strings.TrimSpace(
 		firstString(

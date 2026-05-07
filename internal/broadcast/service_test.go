@@ -467,6 +467,26 @@ func TestListRecipientsRejectsNegativePagination(t *testing.T) {
 	}
 }
 
+func TestListRecipientsRejectsDeepPagesAndOversizedQuery(t *testing.T) {
+	repo := newBroadcastRepoMock()
+	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)
+	job := &repository.BroadcastJob{ID: "job-deep-pagination", TenantID: "tenant-1", InstanceID: "instance-1", Status: statusQueued}
+	repo.jobs[job.ID] = job
+
+	for _, input := range []ListRecipientsInput{
+		{Page: maxBroadcastRecipientPage + 1},
+		{Query: strings.Repeat("x", maxBroadcastRecipientQueryLen+1)},
+	} {
+		_, err := service.ListRecipients(context.Background(), "tenant-1", job.ID, input)
+		if err == nil {
+			t.Fatalf("expected validation error for %+v", input)
+		}
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("expected validation error for %+v, got %v", input, err)
+		}
+	}
+}
+
 func TestHandleReceiptUpdatesRecipientDeliveryProgress(t *testing.T) {
 	repo := newBroadcastRepoMock()
 	service := NewService(repo, instanceRepoMock{}, contactRepoMock{}, &senderMock{}, nilLogger(), 1, 1)

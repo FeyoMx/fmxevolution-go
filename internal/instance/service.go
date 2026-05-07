@@ -587,14 +587,19 @@ func (s *Service) backfillHistoryForInstance(ctx context.Context, instance *repo
 	if instance == nil {
 		return nil, nil, "", fmt.Errorf("%w: instance not found", domain.ErrNotFound)
 	}
+	if err := ctx.Err(); err != nil {
+		return instance, nil, "", err
+	}
 
 	request, anchorSource, err := s.resolveHistoryBackfillRequest(ctx, instance, input)
 	if err != nil {
 		return instance, nil, "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return instance, nil, anchorSource, err
+	}
 	if s.logger != nil {
-		s.logger.Info(
-			"history backfill requested",
+		fields := appendRequestID(ctx,
 			"instance_id", instance.ID,
 			"tenant_id", instance.TenantID,
 			"chat_jid", request.ChatJID,
@@ -602,11 +607,16 @@ func (s *Service) backfillHistoryForInstance(ctx context.Context, instance *repo
 			"anchor_source", anchorSource,
 			"message_id", request.MessageID,
 		)
+		s.logger.Info(
+			"history backfill requested",
+			fields...,
+		)
 	}
 
 	runtime, runtimeErr := s.ensureRuntime()
 	if runtimeErr != nil && s.logger != nil {
-		s.logger.Warn("history backfill runtime unavailable", "instance_id", instance.ID, "error", runtimeErr)
+		fields := appendRequestID(ctx, "instance_id", instance.ID, "tenant_id", instance.TenantID, "error", runtimeErr)
+		s.logger.Warn("history backfill runtime unavailable", fields...)
 	}
 	if runtime == nil {
 		return instance, nil, "", fmt.Errorf("%w: runtime unavailable for history backfill", domain.ErrConflict)
@@ -615,20 +625,27 @@ func (s *Service) backfillHistoryForInstance(ctx context.Context, instance *repo
 	result, err := runtime.RequestHistorySync(ctx, instance, request)
 	if err != nil {
 		if s.logger != nil {
-			s.logger.Warn("history backfill request failed", "instance_id", instance.ID, "chat_jid", request.ChatJID, "error", err)
+			fields := appendRequestID(ctx, "instance_id", instance.ID, "tenant_id", instance.TenantID, "chat_jid", request.ChatJID, "error", err)
+			s.logger.Warn("history backfill request failed", fields...)
 		}
+		return instance, nil, anchorSource, err
+	}
+	if err := ctx.Err(); err != nil {
 		return instance, nil, anchorSource, err
 	}
 
 	s.recordRuntimeObservation(ctx, instance, s.tryRuntimeSnapshot(ctx, instance), "history_sync_requested", "api", "history backfill requested", nil)
 	if s.logger != nil {
-		s.logger.Info(
-			"history backfill accepted",
+		fields := appendRequestID(ctx,
 			"instance_id", instance.ID,
 			"tenant_id", instance.TenantID,
 			"chat_jid", request.ChatJID,
 			"count", request.Count,
 			"anchor_source", anchorSource,
+		)
+		s.logger.Info(
+			"history backfill accepted",
+			fields...,
 		)
 	}
 	return instance, result, anchorSource, nil
@@ -980,7 +997,13 @@ func (s *Service) SearchChats(ctx context.Context, tenantID, reference string, i
 		return nil, nil, err
 	}
 
-	filter := normalizeChatSearchFilter(input)
+	filter, err := normalizeChatSearchFilter(input)
+	if err != nil {
+		return nil, instance, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, instance, err
+	}
 	cache := s.chatSearchCache()
 	if cached, ok := cache.fresh(tenantID, instance.ID, filter, time.Now().UTC()); ok {
 		return cached, instance, nil
@@ -1068,7 +1091,7 @@ func normalizeChatSearchBridgeError(err error) error {
 		strings.Contains(message, "ratelimit"),
 		strings.Contains(message, "too many requests"),
 		strings.Contains(message, "429"):
-		return fmt.Errorf("%w: live chat search is rate limited; retry shortly or use cached data when available", domain.ErrConflict)
+		return fmt.Errorf("%w: live chat search is rate limited; retry shortly or use cached data when available", domain.ErrRateLimited)
 	case strings.Contains(message, "runtime unavailable"),
 		strings.Contains(message, "legacy runtime unavailable"),
 		strings.Contains(message, "legacy client runtime unavailable"),
@@ -1104,8 +1127,11 @@ func (s *Service) SearchMessages(ctx context.Context, tenantID, reference string
 	if err != nil {
 		return nil, instance, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, instance, err
+	}
 	if s.history == nil {
-		return nil, instance, fmt.Errorf("message history repository unavailable")
+		return nil, instance, fmt.Errorf("%w: message history repository unavailable", domain.ErrConflict)
 	}
 
 	messages, err := s.history.List(ctx, tenantID, instance.ID, repository.ConversationMessageFilter{

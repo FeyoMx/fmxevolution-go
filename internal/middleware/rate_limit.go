@@ -67,10 +67,20 @@ func NewMemoryRateLimitStore() *MemoryRateLimitStore {
 }
 
 func (s *MemoryRateLimitStore) Allow(_ context.Context, key string, limit int, window time.Duration) (RateLimitDecision, error) {
+	if limit <= 0 {
+		return RateLimitDecision{
+			Allowed:   true,
+			Remaining: 0,
+			ResetAt:   time.Now().UTC().Add(window),
+			Limit:     limit,
+		}, nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
+	s.pruneExpired(now)
 	entry := s.entries[key]
 	if entry.windowEnd.IsZero() || now.After(entry.windowEnd) {
 		entry = memoryRateLimitEntry{
@@ -97,6 +107,14 @@ func (s *MemoryRateLimitStore) Allow(_ context.Context, key string, limit int, w
 	}, nil
 }
 
+func (s *MemoryRateLimitStore) pruneExpired(now time.Time) {
+	for key, entry := range s.entries {
+		if !entry.windowEnd.IsZero() && now.After(entry.windowEnd) {
+			delete(s.entries, key)
+		}
+	}
+}
+
 func (RedisRateLimitStore) Allow(context.Context, string, int, time.Duration) (RateLimitDecision, error) {
 	return RateLimitDecision{}, fmt.Errorf("redis rate limit store not implemented yet")
 }
@@ -116,6 +134,14 @@ func NewRateLimiter(store RateLimitStore, policy RateLimitPolicy) *RateLimiter {
 func MessageRateLimitPolicy(limit int) RateLimitPolicy {
 	return RateLimitPolicy{
 		Name:   "messages_per_minute",
+		Limit:  limit,
+		Window: time.Minute,
+	}
+}
+
+func SearchRateLimitPolicy(limit int) RateLimitPolicy {
+	return RateLimitPolicy{
+		Name:   "search_per_minute",
 		Limit:  limit,
 		Window: time.Minute,
 	}
@@ -199,14 +225,19 @@ func scopedRateLimitKey(policyName, scope, subject string) string {
 }
 
 func abortRateLimited(c *gin.Context, decision RateLimitDecision) {
-	c.Header("Retry-After", fmt.Sprintf("%d", int(time.Until(decision.ResetAt).Seconds())))
+	retryAfter := int(time.Until(decision.ResetAt).Seconds())
+	if retryAfter < 0 {
+		retryAfter = 0
+	}
+	c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
 	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 		"error":       "rate limit exceeded",
+		"code":        "rate_limited",
 		"policy":      decision.Policy,
 		"scope":       decision.Scope,
 		"limit":       decision.Limit,
 		"remaining":   decision.Remaining,
-		"retry_after": int(time.Until(decision.ResetAt).Seconds()),
+		"retry_after": retryAfter,
 		"reset_at":    decision.ResetAt.UTC(),
 	})
 }
@@ -216,6 +247,15 @@ func extractInstanceID(c *gin.Context) (string, error) {
 		return value, nil
 	}
 	if value := strings.TrimSpace(c.Param("instance_id")); value != "" {
+		return value, nil
+	}
+	if value := strings.TrimSpace(c.Param("instanceID")); value != "" {
+		return value, nil
+	}
+	if value := strings.TrimSpace(c.Param("id")); value != "" {
+		return value, nil
+	}
+	if value := strings.TrimSpace(c.Param("instanceName")); value != "" {
 		return value, nil
 	}
 	if value := strings.TrimSpace(c.Query("instance_id")); value != "" {

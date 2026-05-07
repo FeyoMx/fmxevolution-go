@@ -18,6 +18,7 @@ Strong areas:
 - websocket, rabbitmq, and proxy instance settings
 - CRM contacts/tags/notes
 - shared error DTOs plus clearer operator-facing runtime/backfill responses across the supported MVP routes
+- deployment startup checks for required environment, configurable JSON log levels, health/readiness endpoints, and graceful SIGINT/SIGTERM shutdown
 
 Main gaps:
 
@@ -44,6 +45,8 @@ Default QA fixture data is tenant-scoped to `qa-seed` unless an existing `-tenan
 Implemented routes:
 
 - `GET /healthz`
+- `GET /livez`
+- `GET /readyz`
 - `POST /auth/login`
 - `POST /auth/refresh`
 - `POST /tenant`
@@ -147,6 +150,8 @@ Readiness notes:
 - Runtime action and observability envelopes now include clearer operator-facing fields so the UI can distinguish durable reads from bridge-dependent work.
 - Lifecycle actions, runtime status, runtime history, and history backfill now all follow the same compatibility response pattern with nested `data` plus duplicated top-level fields for frontend refresh flows.
 - Bridge-unavailable failures are now more consistent for operators: reconnect, pair, logout, and history backfill report `409 conflict` instead of leaking a generic `500` when the SaaS layer cannot reach the live bridge.
+- Rate-limited requests now return an explicit `429`/`rate_limited` response instead of a generic conflict or internal error.
+- Request logs include request ID, tenant ID, and route-derived instance ID when applicable; chat, backfill, and broadcast operational logs include request ID when a request context is available.
 
 ### Messaging
 
@@ -182,6 +187,7 @@ Readiness notes:
 - History sync replay blobs delivered by WhatsApp are now ingested into the same read model, and the SaaS layer can request an on-demand history sync when given an explicit or stored message anchor.
 - Chat list parity is still partial because the backend does not persist legacy chat metadata such as full labels, last-message previews, or conversation ordering from durable storage.
 - Repeated chat-list queries are safer for MVP operations: identical tenant+instance+filter requests use a 30-second fresh cache, a 5-second live-query throttle when cached data exists, and a 5-minute stale fallback when the bridge is unavailable or rate-limited.
+- Chat and message search now also have explicit in-memory route rate protection, bounded query strings, and safe message search result limits so malformed or abusive requests cannot trigger unbounded reads.
 - Runtime/history/chat validation now fails more honestly for malformed backfill timestamps and other malformed operator payloads.
 - Chat-list bridge failure logs now include tenant, instance, and request context when available while still staying rate-limited.
 
@@ -232,6 +238,8 @@ Readiness notes:
 - Queueing, tenant scoping, and worker claiming are implemented.
 - Broadcast create now rejects negative delay/rate/retry values, and broadcast list clamps `limit` to a bounded range.
 - Broadcast recipient pagination defaults remain operator-friendly (`page=1`, `limit=50`), but explicitly negative pagination values now fail with a validation envelope instead of being silently coerced.
+- Broadcast list and recipient detail queries are bounded: list limit defaults to 50 and caps at 200; recipient detail caps limit at 200, rejects pages deeper than 1000, and caps recipient search query text at 100 characters.
+- Broadcast read/create/detail/recipient endpoints now share lightweight in-memory tenant/instance-aware route rate protection.
 - Broadcast jobs now perform real WhatsApp text send attempts through the tenant-safe instance send path.
 - The current recipient source is the tenant CRM contact list, limited to contacts with no `instance_id` or a matching `instance_id`, and the recipient set is snapshotted into durable progress rows.
 - Jobs fail honestly when there are no eligible contacts or when the target runtime cannot send.

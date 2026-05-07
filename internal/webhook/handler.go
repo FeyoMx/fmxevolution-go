@@ -170,7 +170,7 @@ func (h *Handler) handleLegacyInstanceWebhookCreate(c *gin.Context) bool {
 			return false
 		}
 		if looksLikeLegacyWebhookPayload(body) {
-			h.service.logger.Warn("legacy webhook update rejected: instance reference missing", "body", string(body), "query_instanceName", strings.TrimSpace(c.Query("instanceName")))
+			h.service.logger.Warn("legacy webhook update rejected: instance reference missing", "body_bytes", len(body), "query_instanceName_present", strings.TrimSpace(c.Query("instanceName")) != "")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "instanceName is required for legacy webhook updates"})
 			return true
 		}
@@ -220,12 +220,12 @@ func (h *Handler) handleLegacyInstanceWebhookCreate(c *gin.Context) bool {
 	normalizedBase64, normalizedByEvents := normalizeLegacyWebhookFlags(payload, rawPayload)
 	instance, err := h.instanceService.SetWebhook(c.Request.Context(), identity.TenantID, reference, webhookURL, normalizedEvents, normalizedBase64, normalizedByEvents)
 	if err != nil {
-		h.service.logger.Warn("legacy webhook update rejected", "tenant_id", identity.TenantID, "reference", reference, "webhook_url", webhookURL, "body", string(body), "error", err.Error())
+		h.service.logger.Warn("legacy webhook update rejected", "tenant_id", identity.TenantID, "reference", reference, "webhook_url_present", strings.TrimSpace(webhookURL) != "", "body_bytes", len(body), "error", err.Error())
 		sharedhandler.WriteError(c, err)
 		return true
 	}
 
-	h.service.logger.Info("legacy webhook updated", "tenant_id", identity.TenantID, "reference", reference, "webhook_url", instance.WebhookURL)
+	h.service.logger.Info("legacy webhook updated", "tenant_id", identity.TenantID, "reference", reference, "webhook_enabled", strings.TrimSpace(instance.WebhookURL) != "")
 
 	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{
 		"message":         "webhook updated",
@@ -346,10 +346,10 @@ func boolFromMap(raw map[string]any, key string) (bool, bool) {
 
 func nestedWebhookConfig(rawJSON json.RawMessage, rawValue any) (string, *bool, bool) {
 	type nestedWebhookPayload struct {
-		URL        string `json:"url"`
-		WebhookURL string `json:"webhook_url"`
+		URL         string `json:"url"`
+		WebhookURL  string `json:"webhook_url"`
 		WebhookURL2 string `json:"webhookUrl"`
-		Enabled    *bool  `json:"enabled"`
+		Enabled     *bool  `json:"enabled"`
 	}
 
 	var nested nestedWebhookPayload

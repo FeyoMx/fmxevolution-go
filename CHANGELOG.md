@@ -98,6 +98,12 @@
 - Replaced stale root `.env.example` with a current example covering both the SaaS API config and the legacy runtime bridge
 - Updated `docker/examples/.env.example` to reflect the current runtime variables
 - Ignored generated local runtime artifacts such as `api.exe`, `api.pid`, and `api*.log`
+- Added deployment startup validation for `DATABASE_URL`, `JWT_SECRET`, `PORT`/`HTTP_ADDRESS`, and `LOG_LEVEL`
+- Added `PORT`-based API binding while keeping `HTTP_ADDRESS` compatibility for existing VPS deployments
+- Added configurable structured logging levels: `debug`, `info`, `warn`, and `error`
+- Added `/livez` and `/readyz` alongside `/healthz`, with `/readyz` checking database connectivity
+- Added graceful background worker stop handling during SIGINT/SIGTERM shutdown
+- Added `docs/deployment.md` with VPS/container run instructions, health checks, environment variables, and troubleshooting
 
 ### Known partial areas
 
@@ -124,6 +130,12 @@
 - Hardened tenant AI settings to the currently supported `openai`-compatible provider surface
 - Hardened broadcast validation by rejecting negative pacing/retry values and clamping list limits
 - Hardened broadcast recipient pagination so omitted values use safe defaults while negative values return validation errors
+- Hardened broadcast recipient detail further by capping page size at 200, rejecting pages deeper than 1000, and capping recipient search text at 100 characters
+- Hardened chat and message search input limits, including bounded query strings and capped message search result size
+- Added lightweight in-memory rate protection to chat search, message search, legacy find routes, and broadcast read/write/detail routes
+- Added explicit `429`/`rate_limited` classification for rate-limit failures and request-cancelled/timeout classification for cancelled contexts
+- Improved cancellation safety for broadcast processing, chat/message search, and history backfill paths where downstream calls accept request context
+- Polished request and operational logs so request ID, tenant ID, and instance ID are included where available without adding per-loop log spam
 - Marked unsupported dashboard tenant/user platform totals as unsupported instead of returning placeholder-looking counts, and added explicit `metrics_limitations`
 - Added request ID context to chat-list bridge failure logs where available without increasing log volume
 - Added broadcast queue logging with tenant and instance context for operator troubleshooting

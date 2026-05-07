@@ -26,6 +26,13 @@ const (
 	recipientStatusDelivered = "delivered"
 	recipientStatusRead      = "read"
 	recipientStatusFailed    = "failed"
+
+	defaultBroadcastListLimit      = 50
+	maxBroadcastListLimit          = 200
+	defaultBroadcastRecipientLimit = 50
+	maxBroadcastRecipientLimit     = 200
+	maxBroadcastRecipientPage      = 1000
+	maxBroadcastRecipientQueryLen  = 100
 )
 
 type instanceFinder interface {
@@ -56,6 +63,7 @@ type Service struct {
 	dispatchEvery  time.Duration
 	queue          chan repository.BroadcastJob
 	once           sync.Once
+	wg             sync.WaitGroup
 
 	limiterMu      sync.Mutex
 	nextInstanceAt map[string]time.Time
@@ -142,10 +150,33 @@ func NewService(repo repository.BroadcastRepository, instances instanceFinder, c
 func (s *Service) Start(ctx context.Context) {
 	s.once.Do(func() {
 		for i := 0; i < s.workers; i++ {
-			go s.worker(ctx, i+1)
+			s.wg.Add(1)
+			go func(workerNumber int) {
+				defer s.wg.Done()
+				s.worker(ctx, workerNumber)
+			}(i + 1)
 		}
-		go s.dispatcher(ctx)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.dispatcher(ctx)
+		}()
 	})
+}
+
+func (s *Service) Stop(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
 }
 
 func (s *Service) Create(ctx context.Context, tenantID string, input CreateInput) (*repository.BroadcastJob, error) {
@@ -214,7 +245,8 @@ func (s *Service) Create(ctx context.Context, tenantID string, input CreateInput
 	if err := s.enrichJob(ctx, job, false); err != nil {
 		return nil, err
 	}
-	s.logger.Info("broadcast job queued", "tenant_id", tenantID, "instance_id", input.InstanceID, "message_length", len(input.Message), "available_at", availableAt)
+	fields := appendBroadcastRequestID(ctx, "tenant_id", tenantID, "instance_id", input.InstanceID, "message_length", len(input.Message), "available_at", availableAt)
+	s.logger.Info("broadcast job queued", fields...)
 	return job, nil
 }
 
@@ -231,10 +263,10 @@ func (s *Service) Get(ctx context.Context, tenantID, jobID string) (*repository.
 
 func (s *Service) List(ctx context.Context, tenantID string, limit int) ([]repository.BroadcastJob, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = defaultBroadcastListLimit
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > maxBroadcastListLimit {
+		limit = maxBroadcastListLimit
 	}
 	jobs, err := s.repo.ListByTenant(ctx, tenantID, limit)
 	if err != nil {
@@ -378,7 +410,9 @@ func (s *Service) handleJob(ctx context.Context, workerID string, job repository
 		"max_attempts", job.MaxAttempts,
 		"rate_per_hour", job.RatePerHour,
 	)
-	s.waitForInstanceSlot(ctx, job.InstanceID, job.RatePerHour)
+	if err := s.waitForInstanceSlot(ctx, job.InstanceID, job.RatePerHour); err != nil {
+		return
+	}
 
 	processCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
@@ -571,17 +605,20 @@ func isRetryableProcessorError(err error) bool {
 	return true
 }
 
-func (s *Service) waitForInstanceSlot(ctx context.Context, instanceID string, ratePerHour int) {
+func (s *Service) waitForInstanceSlot(ctx context.Context, instanceID string, ratePerHour int) error {
 	interval := intervalForRate(ratePerHour)
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		s.limiterMu.Lock()
 		now := time.Now().UTC()
 		next := s.nextInstanceAt[instanceID]
 		if next.IsZero() || !next.After(now) {
 			s.nextInstanceAt[instanceID] = now.Add(interval)
 			s.limiterMu.Unlock()
-			return
+			return nil
 		}
 		wait := next.Sub(now)
 		s.limiterMu.Unlock()
@@ -590,7 +627,7 @@ func (s *Service) waitForInstanceSlot(ctx context.Context, instanceID string, ra
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return ctx.Err()
 		case <-timer.C:
 		}
 	}
@@ -629,14 +666,17 @@ func normalizeRecipientListFilter(input ListRecipientsInput) (repository.Broadca
 	if filter.Page == 0 {
 		filter.Page = 1
 	}
+	if filter.Page > maxBroadcastRecipientPage {
+		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: page cannot exceed %d", domain.ErrValidation, maxBroadcastRecipientPage)
+	}
 	if filter.Limit < 0 {
 		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: limit must be greater than zero", domain.ErrValidation)
 	}
 	if filter.Limit == 0 {
-		filter.Limit = 50
+		filter.Limit = defaultBroadcastRecipientLimit
 	}
-	if filter.Limit > 200 {
-		filter.Limit = 200
+	if filter.Limit > maxBroadcastRecipientLimit {
+		filter.Limit = maxBroadcastRecipientLimit
 	}
 
 	status := strings.ToLower(strings.TrimSpace(input.Status))
@@ -648,11 +688,18 @@ func normalizeRecipientListFilter(input ListRecipientsInput) (repository.Broadca
 	}
 
 	filter.Query = strings.TrimSpace(input.Query)
-	if len(filter.Query) > 100 {
-		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: query cannot exceed 100 characters", domain.ErrValidation)
+	if len(filter.Query) > maxBroadcastRecipientQueryLen {
+		return repository.BroadcastRecipientProgressFilter{}, fmt.Errorf("%w: query cannot exceed %d characters", domain.ErrValidation, maxBroadcastRecipientQueryLen)
 	}
 
 	return filter, nil
+}
+
+func appendBroadcastRequestID(ctx context.Context, fields ...any) []any {
+	if requestID, ok := domain.RequestIDFromContext(ctx); ok {
+		return append(fields, "request_id", requestID)
+	}
+	return fields
 }
 
 func totalPages(total int64, limit int) int {

@@ -31,6 +31,9 @@ func newDeliveryProcessor(repo repository.BroadcastRepository, instances instanc
 }
 
 func (p *deliveryProcessor) Process(ctx context.Context, job repository.BroadcastJob) error {
+	if err := ctx.Err(); err != nil {
+		return retryableProcessorError(err)
+	}
 	if p.repo == nil || p.instances == nil || p.contacts == nil || p.sender == nil {
 		return permanentProcessorError(fmt.Errorf("%w: broadcast delivery dependencies are unavailable", domain.ErrConflict))
 	}
@@ -70,6 +73,9 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 	}
 
 	for idx := range pending {
+		if err := ctx.Err(); err != nil {
+			return retryableProcessorError(err)
+		}
 		recipient := pending[idx]
 		if idx > 0 {
 			if err := waitForRecipientPacing(ctx, job.RatePerHour); err != nil {
@@ -84,6 +90,9 @@ func (p *deliveryProcessor) Process(ctx context.Context, job repository.Broadcas
 		recipient.DeliveryStatus = recipientStatusPending
 		if err := p.repo.SaveRecipientProgress(ctx, &recipient); err != nil {
 			return retryableProcessorError(fmt.Errorf("persist broadcast recipient attempt for %s: %w", recipient.Phone, err))
+		}
+		if err := ctx.Err(); err != nil {
+			return retryableProcessorError(err)
 		}
 
 		if p.logger != nil {
@@ -260,12 +269,18 @@ func eligibleBroadcastRecipients(contacts []repository.Contact, instanceID strin
 }
 
 func (p *deliveryProcessor) loadOrSeedRecipientProgress(ctx context.Context, job repository.BroadcastJob) ([]repository.BroadcastRecipientProgress, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, retryableProcessorError(err)
+	}
 	progress, err := p.repo.ListRecipientProgress(ctx, job.TenantID, job.ID)
 	if err != nil {
 		return nil, retryableProcessorError(fmt.Errorf("load broadcast recipient progress: %w", err))
 	}
 	if len(progress) > 0 {
 		return progress, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, retryableProcessorError(err)
 	}
 
 	contacts, err := p.contacts.ListContacts(ctx, job.TenantID)
@@ -280,6 +295,9 @@ func (p *deliveryProcessor) loadOrSeedRecipientProgress(ctx context.Context, job
 
 	seed := make([]repository.BroadcastRecipientProgress, 0, len(recipients))
 	for _, recipient := range recipients {
+		if err := ctx.Err(); err != nil {
+			return nil, retryableProcessorError(err)
+		}
 		seed = append(seed, repository.BroadcastRecipientProgress{
 			BroadcastID:    job.ID,
 			TenantID:       job.TenantID,

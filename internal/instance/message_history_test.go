@@ -1,9 +1,12 @@
 package instance
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
 )
 
@@ -36,6 +39,23 @@ func TestNormalizeMessageSearchRequestRequiresRemoteJID(t *testing.T) {
 	_, err := normalizeMessageSearchRequest(MessageSearchRequest{})
 	if err == nil {
 		t.Fatal("expected validation error when remoteJid is missing")
+	}
+}
+
+func TestNormalizeMessageSearchRequestRejectsOversizedQuery(t *testing.T) {
+	_, err := normalizeMessageSearchRequest(MessageSearchRequest{
+		Where: map[string]any{
+			"key": map[string]any{
+				"remoteJid": "5217712794633@s.whatsapp.net",
+			},
+			"search": strings.Repeat("x", maxMessageSearchQueryLen+1),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }
 

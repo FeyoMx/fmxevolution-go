@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,9 +179,30 @@ func TestSearchChatsCacheIsTenantSafe(t *testing.T) {
 	}
 }
 
-func TestNormalizeChatSearchBridgeErrorMapsRateLimitToConflict(t *testing.T) {
+func TestNormalizeChatSearchBridgeErrorMapsRateLimitExplicitly(t *testing.T) {
 	err := normalizeChatSearchBridgeError(errors.New("429 too many requests"))
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("expected conflict for rate limit, got %v", err)
+	if !errors.Is(err, domain.ErrRateLimited) {
+		t.Fatalf("expected rate limited error, got %v", err)
+	}
+}
+
+func TestSearchChatsRejectsOversizedQuery(t *testing.T) {
+	service := NewService(
+		lifecycleInstanceRepoMock{instance: &repository.Instance{ID: "instance-1", TenantID: "tenant-1", Name: "alpha"}},
+		nil,
+		nil,
+		&chatRuntimeMock{},
+		nil,
+		nil,
+	)
+
+	_, _, err := service.SearchChats(context.Background(), "tenant-1", "instance-1", ChatSearchRequest{
+		Where: map[string]any{"query": strings.Repeat("x", maxChatSearchQueryLength+1)},
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }

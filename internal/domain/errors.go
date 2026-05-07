@@ -9,4 +9,5 @@ var (
 	ErrConflict     = errors.New("conflict")
 	ErrValidation   = errors.New("validation failed")
 	ErrTimeout      = errors.New("timeout")
+	ErrRateLimited  = errors.New("rate limited")
 )

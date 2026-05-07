@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -86,6 +87,21 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 func (a *Application) Start(ctx context.Context) {
 	a.Broadcast.Start(ctx)
 	a.AI.Start(ctx)
+}
+
+func (a *Application) Stop(ctx context.Context) error {
+	var errs []error
+	if a.Broadcast != nil {
+		if err := a.Broadcast.Stop(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if a.AI != nil {
+		if err := a.AI.Stop(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 type webhookAITrigger struct {

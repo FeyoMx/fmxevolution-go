@@ -31,6 +31,7 @@ func RequestLogging(logger *slog.Logger) gin.HandlerFunc {
 		logger.Info("http request",
 			"request_id", requestID,
 			"tenant_id", identity.TenantID,
+			"instance_id", requestInstanceID(c),
 			"method", c.Request.Method,
 			"path", path,
 			"status", c.Writer.Status(),
@@ -38,6 +39,20 @@ func RequestLogging(logger *slog.Logger) gin.HandlerFunc {
 			"client_ip", c.ClientIP(),
 		)
 	}
+}
+
+func requestInstanceID(c *gin.Context) string {
+	for _, key := range []string{"instanceID", "instance_id", "id", "instanceName"} {
+		if value := strings.TrimSpace(c.Param(key)); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{"instance_id", "instanceId"} {
+		if value := strings.TrimSpace(c.Query(key)); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(c.GetHeader("X-Instance-ID"))
 }
 
 func shouldSkipRequestLog(path, method string, status int, latency time.Duration) bool {

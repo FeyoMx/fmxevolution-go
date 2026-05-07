@@ -31,7 +31,7 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	logger := pkglogger.NewStructuredLogger(cfg.AppEnv).Logger()
+	logger := pkglogger.NewStructuredLoggerWithLevel(cfg.AppEnv, cfg.LogLevel).Logger()
 
 	stores, err := repository.NewStores(
 		cfg.Database.URL,
@@ -50,21 +50,30 @@ func main() {
 		log.Fatalf("reset admin password: %v", err)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	appCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
 
 	app := service.NewApplication(stores, cfg, logger)
-	app.Start(ctx)
+	app.Start(appCtx)
 
-	srv := server.New(cfg, app, logger)
+	srv := server.New(cfg, app, logger, stores.SQL)
+	shutdownDone := make(chan struct{})
 
 	go func() {
-		<-ctx.Done()
+		defer close(shutdownDone)
+		<-signalCtx.Done()
+		logger.Info("shutdown signal received")
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 		defer shutdownCancel()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Error("shutdown server", "error", err)
+		}
+		cancelWorkers()
+		if err := app.Stop(shutdownCtx); err != nil {
+			logger.Error("stop background workers", "error", err)
 		}
 		if err := repository.Close(shutdownCtx, stores); err != nil {
 			logger.Error("close stores", "error", err)
@@ -73,5 +82,8 @@ func main() {
 
 	if err := srv.Start(); err != nil {
 		log.Fatalf("start server: %v", err)
+	}
+	if signalCtx.Err() != nil {
+		<-shutdownDone
 	}
 }

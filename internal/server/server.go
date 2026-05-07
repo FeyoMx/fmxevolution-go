@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/ai"
 	"github.com/EvolutionAPI/evolution-go/internal/auth"
@@ -23,15 +25,17 @@ import (
 type Server struct {
 	httpServer *http.Server
 	logger     *slog.Logger
+	db         *sql.DB
 }
 
-func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Server {
+func New(cfg *config.Config, app *service.Application, logger *slog.Logger, db *sql.DB) *Server {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(middleware.CORS())
 	router.Use(middleware.RequestLogging(logger))
 
 	rateLimitStore := middleware.NewRateLimitStore(cfg.RateLimit.Backend)
+	searchLimiter := middleware.NewRateLimiter(rateLimitStore, middleware.SearchRateLimitPolicy(cfg.RateLimit.MessagesPerMinute))
 	broadcastLimiter := middleware.NewRateLimiter(rateLimitStore, middleware.BroadcastRateLimitPolicy(cfg.RateLimit.BroadcastPerHour))
 	webhookLimiter := middleware.NewRateLimiter(rateLimitStore, middleware.WebhookRateLimitPolicy(cfg.RateLimit.WebhookCallsPerMinute))
 
@@ -47,6 +51,22 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	router.GET("/livez", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "alive"})
+	})
+	router.GET("/readyz", func(c *gin.Context) {
+		if db == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": "database handle unavailable"})
+			return
+		}
+		pingCtx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		if err := db.PingContext(pingCtx); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": "database unavailable"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 
 	router.POST("/auth/login", authHandler.Login)
@@ -73,8 +93,8 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 		protected.PUT("/instance/:id/advanced-settings", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin), instanceHandler.UpdateAdvancedSettings)
 		protected.POST("/instance/:id/messages/text", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SendText)
 		protected.GET("/instance/:id/messages/text/:jobID", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SendTextJobStatus)
-		protected.POST("/instance/:id/chats/search", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SearchChats)
-		protected.POST("/instance/:id/messages/search", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SearchMessages)
+		protected.POST("/instance/:id/chats/search", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), searchLimiter.Middleware(), instanceHandler.SearchChats)
+		protected.POST("/instance/:id/messages/search", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), searchLimiter.Middleware(), instanceHandler.SearchMessages)
 		protected.POST("/instance/:id/messages/media", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SendMediaMessage)
 		protected.POST("/instance/:id/messages/audio", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SendAudioMessage)
 		protected.GET("/instance/:id/websocket", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.GetWebsocketConfig)
@@ -158,8 +178,8 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 		protected.GET("/group/fetchAllGroups/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFetchAllGroups)
 		protected.GET("/v2/group/findGroup/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFindGroup)
 		protected.GET("/v2/group/fetchAllGroups/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFetchAllGroups)
-		protected.POST("/chat/findChats/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFindChats)
-		protected.POST("/chat/findMessages/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFindMessages)
+		protected.POST("/chat/findChats/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), searchLimiter.Middleware(), instanceHandler.LegacyFindChats)
+		protected.POST("/chat/findMessages/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), searchLimiter.Middleware(), instanceHandler.LegacyFindMessages)
 		protected.POST("/message/sendText/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacySendText)
 		protected.POST("/message/sendMedia/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacySendMedia)
 		protected.POST("/message/sendWhatsAppAudio/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacySendAudio)
@@ -194,10 +214,10 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 		protected.PATCH("/contacts/:id", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), crmHandler.UpdateContact)
 		protected.POST("/contacts/:id/notes", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), crmHandler.AddNote)
 		protected.POST("/contacts/:id/tags", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), crmHandler.AssignTags)
-		protected.GET("/broadcast", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastHandler.List)
+		protected.GET("/broadcast", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastLimiter.Middleware(), broadcastHandler.List)
 		protected.POST("/broadcast", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastLimiter.Middleware(), broadcastHandler.Create)
-		protected.GET("/broadcast/:id", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastHandler.Get)
-		protected.GET("/broadcast/:id/recipients", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastHandler.ListRecipients)
+		protected.GET("/broadcast/:id", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastLimiter.Middleware(), broadcastHandler.Get)
+		protected.GET("/broadcast/:id/recipients", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), broadcastLimiter.Middleware(), broadcastHandler.ListRecipients)
 		protected.GET("/webhook", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), webhookHandler.List)
 		protected.POST("/webhook", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin), webhookHandler.Create)
 		protected.GET("/webhook/:id", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), webhookHandler.Get)
@@ -213,6 +233,7 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger) *Ser
 			WriteTimeout: cfg.HTTP.WriteTimeout,
 		},
 		logger: logger,
+		db:     db,
 	}
 }
 

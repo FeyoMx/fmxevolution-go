@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 )
 
 type StructuredLogger struct {
@@ -11,13 +12,30 @@ type StructuredLogger struct {
 }
 
 func NewStructuredLogger(env string) *StructuredLogger {
-	level := slog.LevelInfo
-	if env == "development" {
+	return NewStructuredLoggerWithLevel(env, "")
+}
+
+func NewStructuredLoggerWithLevel(env, configuredLevel string) *StructuredLogger {
+	level := parseLevel(configuredLevel)
+	if strings.TrimSpace(configuredLevel) == "" && env == "development" {
 		level = slog.LevelDebug
 	}
 
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
 	return &StructuredLogger{base: slog.New(handler)}
+}
+
+func parseLevel(value string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func (l *StructuredLogger) Logger() *slog.Logger {

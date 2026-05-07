@@ -91,7 +91,12 @@ type resolvedAudioMessageInput struct {
 
 const emptyChatTimestamp = "0001-01-01T00:00:00Z"
 
-func normalizeChatSearchFilter(input ChatSearchRequest) chatSearchFilter {
+const (
+	maxChatSearchQueryLength = 100
+	maxChatSearchJIDLength   = 255
+)
+
+func normalizeChatSearchFilter(input ChatSearchRequest) (chatSearchFilter, error) {
 	var filter chatSearchFilter
 
 	if value, ok := input.Where["remoteJid"].(string); ok {
@@ -103,8 +108,14 @@ func normalizeChatSearchFilter(input ChatSearchRequest) chatSearchFilter {
 	if value, ok := input.Where["search"].(string); ok && filter.Query == "" {
 		filter.Query = strings.TrimSpace(value)
 	}
+	if len(filter.RemoteJID) > maxChatSearchJIDLength {
+		return chatSearchFilter{}, fmt.Errorf("%w: remoteJid cannot exceed %d characters", domain.ErrValidation, maxChatSearchJIDLength)
+	}
+	if len(filter.Query) > maxChatSearchQueryLength {
+		return chatSearchFilter{}, fmt.Errorf("%w: chat search query cannot exceed %d characters", domain.ErrValidation, maxChatSearchQueryLength)
+	}
 
-	return filter
+	return filter, nil
 }
 
 func (m mediaMessageEnvelope) normalize() (*resolvedMediaMessageInput, error) {

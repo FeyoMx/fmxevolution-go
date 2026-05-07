@@ -26,7 +26,8 @@ Loaded by `internal/config/config.go`.
 | Variable | Purpose | Default |
 |---|---|---|
 | `APP_ENV` | app mode | `development` |
-| `HTTP_ADDRESS` | HTTP bind address | `:8080` |
+| `PORT` | preferred HTTP port for platform/container deploys | none |
+| `HTTP_ADDRESS` | legacy HTTP bind address, used when `PORT` is unset | `:8080` in development |
 | `HTTP_READ_TIMEOUT` | request read timeout | `15s` |
 | `HTTP_WRITE_TIMEOUT` | response write timeout | `15s` |
 | `HTTP_SHUTDOWN_TIMEOUT` | graceful shutdown timeout | `20s` |
@@ -173,7 +174,7 @@ The old root `README.md`, old changelog, and previous env examples described a l
 
 - `DATABASE_URL`
 - `JWT_SECRET`
-- `HTTP_ADDRESS`
+- `PORT` or `HTTP_ADDRESS`
 
 ### What is still partial
 
