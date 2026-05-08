@@ -59,6 +59,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
   - `POST /instance/:id/messages/audio`
 - implemented live runtime-backed chat list on:
   - `POST /instance/:id/chats/search`
+  - `POST /instance/id/:instanceID/chats/search`
 - added an operator-safe cache/throttle layer around live chat-list queries:
   - cache key is tenant ID + instance ID + normalized chat filter
   - fresh cache TTL is 30 seconds
@@ -67,7 +68,10 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
   - cache/stale truth is exposed through `X-Evolution-Chat-*` headers while preserving the `Chat[]` body
 - implemented tenant-safe message history search on:
   - `POST /instance/:id/messages/search`
+  - `POST /instance/id/:instanceID/messages/search`
   - `POST /chat/findMessages/:instanceName`
+- message history search now accepts frontend chat JID aliases (`remoteJid`, `remote_jid`, `chat_jid`, `jid`) and returns additive frontend-friendly fields while preserving the legacy message shape
+- message search logs safe diagnostics with request/tenant/instance/chat/result-count context without logging message bodies
 - added legacy compatibility routes for the current frontend chat composer:
   - `POST /message/sendText/:instanceName`
   - `POST /message/sendMedia/:instanceName`

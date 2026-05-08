@@ -31,6 +31,10 @@ func (m backfillHistoryRepoMock) MarkReceipt(context.Context, string, string, st
 	return nil
 }
 
+func (m backfillHistoryRepoMock) ListGroups(context.Context, string) ([]repository.GroupSummary, error) {
+	return nil, nil
+}
+
 func TestResolveHistoryBackfillRequestAcceptsExplicitAnchor(t *testing.T) {
 	service := &Service{}
 	instance := &repository.Instance{ID: "instance-1", TenantID: "tenant-1"}

@@ -175,6 +175,8 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger, db *
 		protected.PUT("/instance/id/:instanceID/advanced-settings", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin), instanceHandler.UpdateAdvancedSettings)
 		protected.POST("/instance/id/:instanceID/messages/text", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SendText)
 		protected.GET("/instance/id/:instanceID/messages/text/:jobID", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.SendTextJobStatus)
+		protected.POST("/instance/id/:instanceID/chats/search", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), searchLimiter.Middleware(), instanceHandler.SearchChats)
+		protected.POST("/instance/id/:instanceID/messages/search", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), searchLimiter.Middleware(), instanceHandler.SearchMessages)
 		protected.GET("/group/fetchAllGroups/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFetchAllGroups)
 		protected.GET("/v2/group/findGroup/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFindGroup)
 		protected.GET("/v2/group/fetchAllGroups/:instanceName", middleware.RequireRoles(auth.RoleOwner, auth.RoleAdmin, auth.RoleAgent), instanceHandler.LegacyFetchAllGroups)

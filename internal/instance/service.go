@@ -1143,18 +1143,33 @@ func (s *Service) SearchMessages(ctx context.Context, tenantID, reference string
 	})
 	if err != nil {
 		if s.logger != nil {
-			s.logger.Error(
-				"search messages failed",
+			fields := appendRequestID(ctx,
+				"tenant_id", tenantID,
 				"instance_id", instance.ID,
 				"reference", reference,
 				"remote_jid", filter.RemoteJID,
 				"error", err,
 			)
+			s.logger.Error("search messages failed", fields...)
 		}
 		return nil, instance, err
 	}
 
-	return toLegacyMessageRecords(messages), instance, nil
+	records := toLegacyMessageRecords(messages)
+	if s.logger != nil {
+		fields := appendRequestID(ctx,
+			"tenant_id", tenantID,
+			"instance_id", instance.ID,
+			"reference", reference,
+			"remote_jid", filter.RemoteJID,
+			"message_id", filter.MessageID,
+			"query_present", filter.Query != "",
+			"result_count", len(records),
+		)
+		s.logger.Info("search messages completed", fields...)
+	}
+
+	return records, instance, nil
 }
 
 func (s *Service) QueueSendText(ctx context.Context, tenantID, reference string, input SendTextInput) (string, *repository.Instance, error) {
@@ -1917,4 +1932,3 @@ func (s *Service) loadSendTextJob(tenantID, jobID string) (SendTextJobStatus, bo
 func (s *Service) FetchGroups(ctx context.Context, instanceID string) ([]repository.GroupSummary, error) {
 	return s.history.ListGroups(ctx, instanceID)
 }
-

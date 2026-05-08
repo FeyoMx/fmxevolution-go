@@ -274,7 +274,9 @@ These routes were added from the frontend instance/integration gap report withou
 | `GET` | `/instance/:id/messages/text/:jobID` | owner, admin, agent | none | text-job status with `status`, `delivery_status`, `sent`, `delivery_confirmed`, timestamps, `error?`, `message_id?` | implemented |
 | `GET` | `/instance/id/:instanceID/messages/text/:jobID` | owner, admin, agent | none | same as above | implemented |
 | `POST` | `/instance/:id/chats/search` | owner, admin, agent | `{ where? }` | `Chat[]` compatibility list sourced from live contacts/groups, with cache metadata in response headers | implemented |
+| `POST` | `/instance/id/:instanceID/chats/search` | owner, admin, agent | same as above | same | implemented |
 | `POST` | `/instance/:id/messages/search` | owner, admin, agent | legacy-compatible search payload with `where.key.remoteJid`, optional `limit`, `cursor`, `where.query`, `where.key.id` | `Message[]` chronological history response | implemented |
+| `POST` | `/instance/id/:instanceID/messages/search` | owner, admin, agent | same as above | same | implemented |
 | `POST` | `/instance/:id/messages/media` | owner, admin, agent | media JSON payload, accepts either flat fields or nested `mediaMessage` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
 | `POST` | `/instance/:id/messages/audio` | owner, admin, agent | audio JSON payload, accepts either root `audio` or nested `audioMessage.audio` | `{ message, instance_id, instanceName, engine_instance_id, data }` | implemented |
 
@@ -293,6 +295,10 @@ Notes:
   - `X-Evolution-Chat-Cache-Reason`: present for stale/throttled cache returns
 - When no cache is available and the live bridge is unavailable or rate-limited, the route returns the shared `{ error, message, code }` envelope with `409 conflict`; these failures are not treated as auth errors.
 - `messages/search` is now backed by a tenant-safe `ConversationMessage` read model in the SaaS database.
+- Message search accepts the selected chat JID through `where.key.remoteJid`, `where.key.remote_jid`, `where.key.chat_jid`, `where.remoteJid`, `where.remote_jid`, `where.chat_jid`, or top-level `remoteJid`, `remote_jid`, `chat_jid`, and `jid`. It also accepts `where.key.id`, `where.key.message_id`, `where.messageId`, `where.message_id`, top-level `messageId`, and top-level `message_id` for a specific message.
+- Message search returns an empty `[]` when the tenant-scoped history has no rows for that chat; this is a truthful empty state, not an internal error.
+- Each `Message[]` item preserves the legacy shape (`id`, `key.remoteJid`, `key.fromMe`, `messageType`, `message`, `messageTimestamp`) and also includes frontend-friendly fields: `message_id`, `remoteJid`, `remote_jid`, `chat_jid`, `direction`, `fromMe`, `text`, `body`, `timestamp`, and status/media metadata when present.
+- Message search diagnostics log request ID when available, tenant ID, instance ID, requested chat JID, optional message ID/query presence, and result count. Full message bodies and payloads are not logged.
 - Current persistence is strongest for outbound text/media/audio sends.
 - Inbound messages are now persisted through both the active runtime bridge callback path and a tenant-safe inbound webhook fallback path when `DispatchInbound` includes enough message metadata.
 - Inbound historical messages are also persisted when the bridge delivers a `HistorySync` replay blob, including on-demand sync requests triggered from the SaaS backfill route.

@@ -60,7 +60,9 @@
 - Added a tenant-safe `ConversationMessage` history model for chat search parity
 - Added message-history search on:
   - `/instance/:id/messages/search`
+  - `/instance/id/:instanceID/messages/search`
   - `/chat/findMessages/:instanceName`
+- Hardened message-history search for the frontend by accepting chat JID aliases, returning additive frontend-friendly message fields, preserving truthful empty `[]` responses, and logging safe search diagnostics.
 - Added bridge callbacks to persist inbound runtime messages and delivery/read receipts into the SaaS history model
 - Added legacy compatibility send routes for the current frontend:
   - `/message/sendText/:instanceName`
@@ -68,6 +70,7 @@
   - `/message/sendWhatsAppAudio/:instanceName`
 - Added live runtime-backed chat list support on:
   - `/instance/:id/chats/search`
+  - `/instance/id/:instanceID/chats/search`
   - `/chat/findChats/:instanceName`
 - Added operator-safe chat-list caching for live bridge-backed chat search, with tenant+instance+filter cache keys, conservative TTLs, stale fallback on bridge/rate-limit failures, and response headers that mark cached/stale results without changing the `Chat[]` body shape
 - Added tenant-safe runtime admin routes for:

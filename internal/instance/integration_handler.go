@@ -102,7 +102,7 @@ func (h *Handler) SearchChats(c *gin.Context) {
 	}
 
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
-	result, _, err := h.service.SearchChats(c.Request.Context(), identity.TenantID, c.Param("id"), input)
+	result, _, err := h.service.SearchChats(c.Request.Context(), identity.TenantID, instanceReferenceFromParams(c), input)
 	if err != nil {
 		sharedhandler.WriteError(c, err)
 		return
@@ -119,7 +119,7 @@ func (h *Handler) SearchMessages(c *gin.Context) {
 	}
 
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
-	messages, _, err := h.service.SearchMessages(c.Request.Context(), identity.TenantID, c.Param("id"), input)
+	messages, _, err := h.service.SearchMessages(c.Request.Context(), identity.TenantID, instanceReferenceFromParams(c), input)
 	if err != nil {
 		sharedhandler.WriteError(c, err)
 		return

@@ -21,9 +21,16 @@ const (
 )
 
 type MessageSearchRequest struct {
-	Where  map[string]any `json:"where"`
-	Limit  int            `json:"limit"`
-	Cursor string         `json:"cursor,omitempty"`
+	Where        map[string]any `json:"where"`
+	Limit        int            `json:"limit"`
+	Cursor       string         `json:"cursor,omitempty"`
+	RemoteJID    string         `json:"remoteJid,omitempty"`
+	RemoteJIDAlt string         `json:"remote_jid,omitempty"`
+	ChatJID      string         `json:"chat_jid,omitempty"`
+	JID          string         `json:"jid,omitempty"`
+	MessageID    string         `json:"message_id,omitempty"`
+	MessageIDAlt string         `json:"messageId,omitempty"`
+	Query        string         `json:"query,omitempty"`
 }
 
 type messageSearchFilter struct {
@@ -42,11 +49,25 @@ type legacyMessageKey struct {
 
 type legacyMessageRecord struct {
 	ID               string           `json:"id"`
+	MessageID        string           `json:"message_id"`
+	RemoteJID        string           `json:"remoteJid"`
+	RemoteJIDAlt     string           `json:"remote_jid"`
+	ChatJID          string           `json:"chat_jid"`
+	Direction        string           `json:"direction"`
+	FromMe           bool             `json:"fromMe"`
 	Key              legacyMessageKey `json:"key"`
 	PushName         string           `json:"pushName"`
 	MessageType      string           `json:"messageType"`
 	Message          map[string]any   `json:"message"`
+	Text             string           `json:"text"`
+	Body             string           `json:"body"`
+	Caption          string           `json:"caption,omitempty"`
+	MediaURL         string           `json:"mediaUrl,omitempty"`
+	MimeType         string           `json:"mimetype,omitempty"`
+	FileName         string           `json:"fileName,omitempty"`
+	Status           string           `json:"status,omitempty"`
 	MessageTimestamp string           `json:"messageTimestamp"`
+	Timestamp        string           `json:"timestamp"`
 	InstanceID       string           `json:"instanceId"`
 	Source           string           `json:"source"`
 }
@@ -63,17 +84,30 @@ func normalizeMessageSearchRequest(input MessageSearchRequest) (messageSearchFil
 	filter.RemoteJID = strings.TrimSpace(
 		firstString(
 			nestedString(input.Where, "key", "remoteJid"),
+			nestedString(input.Where, "key", "remote_jid"),
+			nestedString(input.Where, "key", "chat_jid"),
 			nestedString(input.Where, "key", "jid"),
 			stringValue(input.Where["remoteJid"]),
+			stringValue(input.Where["remote_jid"]),
+			stringValue(input.Where["chat_jid"]),
 			stringValue(input.Where["chatId"]),
 			stringValue(input.Where["jid"]),
+			input.RemoteJID,
+			input.RemoteJIDAlt,
+			input.ChatJID,
+			input.JID,
 		),
 	)
 	filter.MessageID = strings.TrimSpace(
 		firstString(
 			nestedString(input.Where, "key", "id"),
+			nestedString(input.Where, "key", "message_id"),
+			nestedString(input.Where, "key", "messageId"),
 			stringValue(input.Where["id"]),
 			stringValue(input.Where["messageId"]),
+			stringValue(input.Where["message_id"]),
+			input.MessageID,
+			input.MessageIDAlt,
 		),
 	)
 	filter.Query = strings.TrimSpace(
@@ -81,6 +115,7 @@ func normalizeMessageSearchRequest(input MessageSearchRequest) (messageSearchFil
 			stringValue(input.Where["query"]),
 			stringValue(input.Where["search"]),
 			stringValue(input.Where["text"]),
+			input.Query,
 		),
 	)
 	if len(filter.RemoteJID) > maxMessageSearchJIDLen {
@@ -217,22 +252,62 @@ func normalizeStoredMessageType(messageType string) string {
 func toLegacyMessageRecords(items []repository.ConversationMessage) []legacyMessageRecord {
 	records := make([]legacyMessageRecord, 0, len(items))
 	for _, item := range items {
+		id := firstString(item.ExternalMessageID, item.ID)
+		fromMe := strings.EqualFold(item.Direction, "outbound")
+		messagePayload := buildFrontendMessagePayload(item)
+		timestamp := item.MessageTimestamp.UTC().Format(time.RFC3339)
 		records = append(records, legacyMessageRecord{
-			ID: firstString(item.ExternalMessageID, item.ID),
+			ID:           id,
+			MessageID:    id,
+			RemoteJID:    item.RemoteJID,
+			RemoteJIDAlt: item.RemoteJID,
+			ChatJID:      item.RemoteJID,
+			Direction:    item.Direction,
+			FromMe:       fromMe,
 			Key: legacyMessageKey{
-				ID:        firstString(item.ExternalMessageID, item.ID),
-				FromMe:    strings.EqualFold(item.Direction, "outbound"),
+				ID:        id,
+				FromMe:    fromMe,
 				RemoteJID: item.RemoteJID,
 			},
 			PushName:         firstString(item.PushName, trimRemoteJID(item.RemoteJID)),
 			MessageType:      normalizeStoredMessageType(item.MessageType),
-			Message:          buildFrontendMessagePayload(item),
-			MessageTimestamp: item.MessageTimestamp.UTC().Format(time.RFC3339),
+			Message:          messagePayload,
+			Text:             extractStoredMessageText(item, messagePayload),
+			Body:             item.Body,
+			Caption:          item.Caption,
+			MediaURL:         item.MediaURL,
+			MimeType:         item.MimeType,
+			FileName:         item.FileName,
+			Status:           item.Status,
+			MessageTimestamp: timestamp,
+			Timestamp:        timestamp,
 			InstanceID:       item.InstanceID,
 			Source:           firstString(item.Source, item.RemoteJID),
 		})
 	}
 	return records
+}
+
+func extractStoredMessageText(item repository.ConversationMessage, payload map[string]any) string {
+	if text := strings.TrimSpace(item.Body); text != "" {
+		return text
+	}
+	if text := stringValue(payload["conversation"]); text != "" {
+		return text
+	}
+	if text := stringValue(payload["text"]); text != "" {
+		return text
+	}
+	for _, key := range []string{"extendedTextMessage", "imageMessage", "videoMessage", "documentMessage"} {
+		nested, ok := payload[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if text := firstString(stringValue(nested["text"]), stringValue(nested["caption"])); text != "" {
+			return text
+		}
+	}
+	return strings.TrimSpace(item.Caption)
 }
 
 func buildFrontendMessagePayload(item repository.ConversationMessage) map[string]any {
