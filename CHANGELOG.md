@@ -38,6 +38,7 @@
 - Extended broadcast and dashboard recipient analytics so `sent` remains inclusive of later receipt states while `delivered` and `read` are also exposed separately
 - Added `broadcast_id` to broadcast operational logs where relevant while retaining `job_id` compatibility for existing log searches
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
+- Made AI settings first-use friendly so missing tenant settings rows return disabled safe defaults, and instance AI reads include tenant defaults plus override/effective status instead of returning a hard 404.
 - Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
 - Normalized bridge-unavailable lifecycle failures so reconnect, pair, and logout now return conflict-style operator errors instead of generic internal errors
 - Added the missing `conversation_messages` table to the SQL baseline migration so tenant-safe message history search no longer depends on runtime auto-migrate to exist

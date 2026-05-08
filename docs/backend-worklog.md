@@ -99,6 +99,7 @@ This worklog reflects the current SaaS backend worktree under `cmd/api`, `intern
 - added shared validation-error envelopes for auth, tenant, CRM, broadcast, AI, and instance runtime handlers
 - hardened tenant create input normalization and minimum admin password validation
 - hardened AI tenant settings to the currently supported `openai`-compatible provider surface
+- made AI settings reads first-use friendly by returning disabled tenant defaults when the settings row has not been created yet, while keeping instance reads tenant-scoped and enriched with override/effective status
 - hardened CRM phone validation so empty digit-only payloads fail fast instead of creating ambiguous contacts
 - hardened runtime/backfill input parsing so malformed timestamps fail honestly instead of being silently ignored
 - added clearer operator-facing runtime action and observability fields:

@@ -111,13 +111,14 @@ Notes:
 
 | Method | Path | Roles | Request body | Success response | Tenant scope |
 |---|---|---|---|---|---|
-| `GET` | `/ai/instances/:instanceID` | owner, admin, agent | none | `{ instance_id, enabled, auto_reply }` | instance must belong to current tenant |
+| `GET` | `/ai/instances/:instanceID` | owner, admin, agent | none | `{ instance_id, enabled, auto_reply, tenant_enabled, tenant_auto_reply, effective_enabled, effective_auto_reply, tenant_settings_configured, tenant_settings }` | instance must belong to current tenant |
 | `PUT` | `/ai/instances/:instanceID` | owner, admin | `{ enabled, auto_reply }` | `{ instance_id, enabled, auto_reply }` | instance must belong to current tenant |
 
 Notes:
 
 - AI reply generation is partial: generated replies are emitted as outbound webhook events, not sent directly to WhatsApp by this SaaS layer.
 - Tenant AI settings currently accept only `openai`-compatible providers in the SaaS MVP.
+- AI settings reads are first-use friendly. When no tenant AI settings row exists yet, `GET /ai/settings` returns disabled defaults (`enabled=false`, `auto_reply=false`, `provider=openai`, configured safe `model`/`base_url` when present, and no secrets). Instance AI reads include those tenant defaults plus the instance override toggles; missing settings rows do not produce `404`.
 
 ## Instances
 

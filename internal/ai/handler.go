@@ -44,16 +44,12 @@ func (h *Handler) ConfigureTenant(c *gin.Context) {
 
 func (h *Handler) GetInstanceSettings(c *gin.Context) {
 	identity, _ := domain.IdentityFromContext(c.Request.Context())
-	instance, err := h.service.GetInstanceSettings(c.Request.Context(), identity.TenantID, c.Param("instanceID"))
+	settings, err := h.service.GetInstanceSettings(c.Request.Context(), identity.TenantID, c.Param("instanceID"))
 	if err != nil {
 		sharedhandler.WriteError(c, err)
 		return
 	}
-	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{
-		"instance_id": c.Param("instanceID"),
-		"enabled":     instance.AIEnabled,
-		"auto_reply":  instance.AIAutoReply,
-	})
+	sharedhandler.WriteJSON(c, http.StatusOK, settings)
 }
 
 func (h *Handler) ConfigureInstance(c *gin.Context) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/EvolutionAPI/evolution-go/internal/config"
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
+	"gorm.io/gorm"
 )
 
 type outboundDispatcher interface {
@@ -54,6 +56,18 @@ type TenantSettingsInput struct {
 type InstanceSettingsInput struct {
 	Enabled   bool `json:"enabled"`
 	AutoReply bool `json:"auto_reply"`
+}
+
+type InstanceSettings struct {
+	InstanceID               string                 `json:"instance_id"`
+	Enabled                  bool                   `json:"enabled"`
+	AutoReply                bool                   `json:"auto_reply"`
+	TenantEnabled            bool                   `json:"tenant_enabled"`
+	TenantAutoReply          bool                   `json:"tenant_auto_reply"`
+	EffectiveEnabled         bool                   `json:"effective_enabled"`
+	EffectiveAutoReply       bool                   `json:"effective_auto_reply"`
+	TenantSettingsConfigured bool                   `json:"tenant_settings_configured"`
+	TenantSettings           *repository.AISettings `json:"tenant_settings"`
 }
 
 type IncomingMessageInput struct {
@@ -197,11 +211,18 @@ func (s *Service) ConfigureTenant(ctx context.Context, tenantID string, input Te
 }
 
 func (s *Service) GetTenantSettings(ctx context.Context, tenantID string) (*repository.AISettings, error) {
-	settings, err := s.repo.GetByTenant(ctx, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: ai settings not found", domain.ErrNotFound)
+	if tenantID == "" {
+		return nil, fmt.Errorf("%w: tenant_id is required", domain.ErrValidation)
 	}
-	return settings, nil
+
+	settings, err := s.repo.GetByTenant(ctx, tenantID)
+	if err == nil {
+		return settings, nil
+	}
+	if isSettingsMissing(err) {
+		return s.defaultTenantSettings(tenantID), nil
+	}
+	return nil, err
 }
 
 func (s *Service) ConfigureInstance(ctx context.Context, tenantID, instanceID string, input InstanceSettingsInput) (*repository.Instance, error) {
@@ -218,12 +239,52 @@ func (s *Service) ConfigureInstance(ctx context.Context, tenantID, instanceID st
 	return instance, nil
 }
 
-func (s *Service) GetInstanceSettings(ctx context.Context, tenantID, instanceID string) (*repository.Instance, error) {
+func (s *Service) GetInstanceSettings(ctx context.Context, tenantID, instanceID string) (*InstanceSettings, error) {
 	instance, err := s.instances.GetByID(ctx, tenantID, instanceID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: instance not found", domain.ErrNotFound)
 	}
-	return instance, nil
+	tenantSettings, configured, err := s.getTenantSettingsWithConfiguredStatus(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return &InstanceSettings{
+		InstanceID:               instance.ID,
+		Enabled:                  instance.AIEnabled,
+		AutoReply:                instance.AIAutoReply,
+		TenantEnabled:            tenantSettings.Enabled,
+		TenantAutoReply:          tenantSettings.AutoReply,
+		EffectiveEnabled:         tenantSettings.Enabled && instance.AIEnabled,
+		EffectiveAutoReply:       tenantSettings.Enabled && tenantSettings.AutoReply && instance.AIEnabled && instance.AIAutoReply,
+		TenantSettingsConfigured: configured,
+		TenantSettings:           tenantSettings,
+	}, nil
+}
+
+func (s *Service) getTenantSettingsWithConfiguredStatus(ctx context.Context, tenantID string) (*repository.AISettings, bool, error) {
+	settings, err := s.repo.GetByTenant(ctx, tenantID)
+	if err == nil {
+		return settings, true, nil
+	}
+	if isSettingsMissing(err) {
+		return s.defaultTenantSettings(tenantID), false, nil
+	}
+	return nil, false, err
+}
+
+func (s *Service) defaultTenantSettings(tenantID string) *repository.AISettings {
+	return &repository.AISettings{
+		TenantID:  tenantID,
+		Enabled:   false,
+		AutoReply: false,
+		Provider:  "openai",
+		Model:     strings.TrimSpace(s.cfg.Model),
+		BaseURL:   strings.TrimSpace(s.cfg.BaseURL),
+	}
+}
+
+func isSettingsMissing(err error) bool {
+	return errors.Is(err, domain.ErrNotFound) || errors.Is(err, gorm.ErrRecordNotFound)
 }
 
 func (s *Service) HandleInboundAsync(_ context.Context, tenantID string, input IncomingMessageInput) error {

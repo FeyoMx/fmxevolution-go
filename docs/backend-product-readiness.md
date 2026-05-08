@@ -95,6 +95,7 @@ Readiness notes:
 - Tenant AI settings and per-instance toggles are implemented.
 - AI replies are generated and emitted through outbound webhook events.
 - Tenant AI settings are intentionally constrained to `openai`-compatible providers in the supported MVP surface.
+- AI settings are first-use friendly: missing tenant settings rows return disabled safe defaults, and instance AI reads include tenant defaults plus instance override/effective status without exposing secrets.
 - This is still weaker than full manager/runtime bot parity because this SaaS layer does not own all legacy bot CRUD suites.
 
 ### Instances and runtime lifecycle
