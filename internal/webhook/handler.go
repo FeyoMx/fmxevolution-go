@@ -159,12 +159,13 @@ func (h *Handler) handleLegacyInstanceWebhookCreate(c *gin.Context) bool {
 		strings.TrimSpace(payload.InstanceName),
 		strings.TrimSpace(payload.Instance),
 		strings.TrimSpace(payload.InstanceID),
-		strings.TrimSpace(payload.Name),
 		stringFromMap(rawPayload, "instanceName"),
 		stringFromMap(rawPayload, "instance"),
 		stringFromMap(rawPayload, "instance_id"),
-		stringFromMap(rawPayload, "name"),
 	)
+	if reference == "" && legacyWebhookAllowsNameReference(payload, rawPayload) {
+		reference = firstNonEmpty(strings.TrimSpace(payload.Name), stringFromMap(rawPayload, "name"))
+	}
 	if reference == "" {
 		if len(body) == 0 {
 			return false
@@ -261,12 +262,30 @@ func looksLikeLegacyWebhookPayload(body []byte) bool {
 		return false
 	}
 
-	for _, key := range []string{"webhook", "webhook_url", "webhookUrl", "url", "enabled", "events"} {
+	for _, key := range []string{"webhook", "webhook_url", "webhookUrl", "enabled", "events"} {
 		if _, ok := raw[key]; ok {
 			return true
 		}
 	}
 
+	return false
+}
+
+func legacyWebhookAllowsNameReference(payload legacyWebhookPayload, raw map[string]any) bool {
+	if strings.TrimSpace(payload.Name) == "" && stringFromMap(raw, "name") == "" {
+		return false
+	}
+	if len(payload.Webhook) > 0 || len(payload.Events) > 0 || payload.Enabled != nil {
+		return true
+	}
+	if strings.TrimSpace(payload.WebhookURL) != "" || strings.TrimSpace(payload.WebhookURL2) != "" {
+		return true
+	}
+	for _, key := range []string{"webhook", "webhook_url", "webhookUrl", "enabled", "events"} {
+		if _, ok := raw[key]; ok {
+			return true
+		}
+	}
 	return false
 }
 
@@ -430,4 +449,3 @@ func normalizeLegacyWebhookFlags(payload legacyWebhookPayload, raw map[string]an
 	}
 	return false, false
 }
-
