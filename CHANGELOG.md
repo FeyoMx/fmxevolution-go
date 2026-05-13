@@ -39,6 +39,7 @@
 - Added `broadcast_id` to broadcast operational logs where relevant while retaining `job_id` compatibility for existing log searches
 - Added tenant webhook endpoint registry and outbound/inbound dispatch
 - Fixed `POST /webhook` compatibility routing so normal tenant webhook endpoint creation payloads such as `{ name, url }` are no longer mistaken for legacy instance webhook updates.
+- Clarified existing webhook verification docs so operators use read-only inspection routes instead of creating duplicate endpoints.
 - Made AI settings first-use friendly so missing tenant settings rows return disabled safe defaults, and instance AI reads include tenant defaults plus override/effective status instead of returning a hard 404.
 - Added AI tenant settings, instance toggles, conversation memory, queued processing, and outbound webhook emission for generated replies
 - Normalized bridge-unavailable lifecycle failures so reconnect, pair, and logout now return conflict-style operator errors instead of generic internal errors

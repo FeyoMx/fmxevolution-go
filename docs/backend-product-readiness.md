@@ -293,6 +293,8 @@ Readiness notes:
 
 - Tenant-managed webhook endpoint registry is implemented.
 - Dispatch and inbound AI trigger flow are implemented.
+- Existing webhook inspection is supported without creating duplicates: use `GET /webhook` for tenant endpoints, `GET /webhook/:id` for one endpoint, and `GET /webhook?instanceName=<name>` for legacy instance webhook preferences.
+- `POST /webhook` is the create/update path and should not be used as a verification check for an already-working webhook.
 
 ## Partially Matched Features
 

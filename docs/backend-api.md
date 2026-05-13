@@ -530,9 +530,22 @@ Current limitation:
 
 If both direction flags are false on create, the service defaults both to `true`.
 
+Read-only verification:
+
+- Use `GET /webhook` to list the tenant-managed webhook endpoints that already exist for the authenticated tenant.
+- Use `GET /webhook/:id` to inspect one existing tenant-managed endpoint by ID.
+- Do not use `POST /webhook` when the goal is only to verify an existing endpoint; it creates a new tenant-managed endpoint unless the payload is recognized as a legacy instance webhook update.
+- Do not paste webhook signing secrets into tickets or logs. The endpoint response may include stored endpoint metadata, so handle it as operationally sensitive.
+
 ### Legacy instance webhook compatibility
 
 `GET /webhook?instanceName=<name>` and `POST /webhook` also support older frontend payloads for instance-level webhook sync.
+
+Read-only instance preference inspection:
+
+- Use `GET /webhook?instanceName=<instanceName>` to inspect the current legacy instance webhook preferences for that instance.
+- The response includes `enabled`, `instanceName`, `url`, `webhook`, `webhook_url`, `events`, `webhookBase64`, and `webhookByEvents`.
+- This read path resolves the instance inside the authenticated tenant and does not create a new webhook endpoint.
 
 Accepted legacy payload forms include:
 
@@ -572,6 +585,13 @@ Headers sent to target endpoints:
 Rate limiting:
 
 - both dispatch endpoints are wrapped by the webhook limiter
+
+Testing delivery:
+
+- Prefer triggering a real application event when validating an existing production webhook, such as a real inbound WhatsApp message on the configured instance or a safe outbound/AI event that already belongs to the tenant workflow.
+- `POST /webhook/inbound` and `POST /webhook/outbound` manually dispatch a synthetic event to currently configured tenant endpoints. They do not create webhook endpoints, but they can call the external webhook URL and may trigger downstream automation, so use them only with an explicit test payload and operator approval.
+- Delivery responses include one result per eligible endpoint with `delivered`, `status_code`, and `error`.
+- Backend logs use messages such as `webhook delivered` and `webhook delivery failed` with `tenant_id`, `endpoint_id`, `direction`, `event_type`, and `status_code` where available.
 
 AI side effect:
 

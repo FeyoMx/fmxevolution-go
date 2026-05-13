@@ -172,6 +172,64 @@ Common signals:
 - `broadcast recipient send returned no delivery evidence`: send path did not produce durable evidence and the job will retry if attempts remain.
 - `/readyz` `503` plus repository errors: database connectivity or pool saturation.
 
+## Verify Existing Webhooks
+
+Use these read-only checks when a webhook already exists and the goal is inspection. Do not call `POST /webhook` for verification because that route is the create/update path.
+
+List tenant-managed webhook endpoints:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $TOKEN" \
+  https://api.example.com/webhook
+```
+
+Inspect one tenant-managed endpoint by ID:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $TOKEN" \
+  https://api.example.com/webhook/$WEBHOOK_ENDPOINT_ID
+```
+
+Inspect legacy instance webhook preferences:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $TOKEN" \
+  "https://api.example.com/webhook?instanceName=$INSTANCE_NAME"
+```
+
+Expected instance preference fields:
+
+- `enabled`
+- `instanceName`
+- `url`, `webhook`, and `webhook_url`
+- `events`
+- `webhookBase64`
+- `webhookByEvents`
+
+Safe delivery test:
+
+1. Prefer a real tenant event, such as sending one opted-in inbound test message to the configured WhatsApp instance.
+2. Confirm the external webhook receiver records the event.
+3. Check API logs for `webhook delivered` or `webhook delivery failed`.
+4. If a manual dispatch is necessary, use `POST /webhook/inbound` or `POST /webhook/outbound` only with an explicit test payload and only after confirming the downstream automation can safely receive it. These routes do not create endpoints, but they do call existing external webhook URLs.
+
+Avoid duplicate webhook creation:
+
+- Do not run `POST /webhook` just to check whether a webhook exists.
+- Do not copy a working endpoint into a second endpoint record unless duplicate downstream delivery is intentional.
+- If the goal is instance-level verification, use `GET /webhook?instanceName=...`.
+- If the goal is tenant endpoint verification, use `GET /webhook` and then `GET /webhook/:id`.
+
+Useful log filters:
+
+```bash
+grep -E 'webhook delivered|webhook delivery failed|legacy webhook updated' api*.log
+grep -E 'endpoint_id|tenant_id|direction|event_type|status_code' api*.log | tail -n 100
+```
+
 ## Restart Backend Safely
 
 Before restart:
