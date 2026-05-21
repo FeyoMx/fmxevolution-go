@@ -344,10 +344,63 @@ func (r *LegacyRuntime) MarkRead(ctx context.Context, instance *repository.Insta
 		return err
 	}
 
+	timestamp := time.Now()
+	receiptType := types.ReceiptTypeRead
 	if input.Played {
-		return client.MarkRead(ctx, input.IDs, time.Now(), input.ChatJID, input.SenderJID, types.ReceiptTypePlayed)
+		receiptType = types.ReceiptTypePlayed
 	}
-	return client.MarkRead(ctx, input.IDs, time.Now(), input.ChatJID, input.SenderJID)
+
+	if r.logger != nil {
+		r.logger.Info(
+			"markread whatsmeow request",
+			"instance_id", instance.ID,
+			"engine_instance_id", legacyInstance.Id,
+			"ids", input.IDs,
+			"count", len(input.IDs),
+			"chat", input.ChatJID.String(),
+			"chat_user", input.ChatJID.User,
+			"chat_server", input.ChatJID.Server,
+			"sender", input.SenderJID.String(),
+			"sender_empty", input.SenderJID.IsEmpty(),
+			"timestamp", timestamp.UTC().Format(time.RFC3339Nano),
+			"receipt_type", string(receiptType),
+			"client_connected", client.IsConnected(),
+			"client_logged_in", client.IsLoggedIn(),
+		)
+	}
+
+	if receiptType == types.ReceiptTypePlayed {
+		err = client.MarkRead(ctx, input.IDs, timestamp, input.ChatJID, input.SenderJID, types.ReceiptTypePlayed)
+	} else {
+		err = client.MarkRead(ctx, input.IDs, timestamp, input.ChatJID, input.SenderJID)
+	}
+	if r.logger != nil {
+		if err != nil {
+			r.logger.Error(
+				"markread whatsmeow failed",
+				"instance_id", instance.ID,
+				"engine_instance_id", legacyInstance.Id,
+				"ids", input.IDs,
+				"chat", input.ChatJID.String(),
+				"sender", input.SenderJID.String(),
+				"receipt_type", string(receiptType),
+				"error", err,
+			)
+		} else {
+			r.logger.Info(
+				"markread whatsmeow succeeded",
+				"instance_id", instance.ID,
+				"engine_instance_id", legacyInstance.Id,
+				"ids", input.IDs,
+				"count", len(input.IDs),
+				"chat", input.ChatJID.String(),
+				"sender", input.SenderJID.String(),
+				"timestamp", timestamp.UTC().Format(time.RFC3339Nano),
+				"receipt_type", string(receiptType),
+			)
+		}
+	}
+	return err
 }
 
 func (r *LegacyRuntime) SendMedia(ctx context.Context, instance *repository.Instance, input resolvedMediaMessageInput) (*SendMediaResult, error) {
