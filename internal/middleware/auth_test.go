@@ -85,6 +85,67 @@ func TestAuthMiddlewareAcceptsAPIKeyAndAttachesTenantContext(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareAcceptsLegacyApikeyHeaderForTenantAuth(t *testing.T) {
+	rawKey, err := repository.GenerateTenantAPIKey()
+	if err != nil {
+		t.Fatalf("generate api key: %v", err)
+	}
+	hash, err := repository.HashAPIKey(rawKey)
+	if err != nil {
+		t.Fatalf("hash api key: %v", err)
+	}
+
+	service := auth.NewService(
+		middlewareTenantRepoMock{tenant: &repository.Tenant{
+			ID:           "tenant-1",
+			Slug:         "agency",
+			APIKeyPrefix: repository.APIKeyPrefix(rawKey),
+			APIKeyHash:   hash,
+		}},
+		middlewareUserRepoMock{},
+		auth.NewTokenManager("test-secret", time.Hour, 24*time.Hour),
+	)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(NewAuthMiddleware(service).Guard())
+	router.POST("/instance/setPresence/:instanceName", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/instance/setPresence/ventas", nil)
+	req.Header.Set("apikey", rawKey)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestAuthMiddlewareRejectsMissingCredentials(t *testing.T) {
+	service := auth.NewService(
+		middlewareTenantRepoMock{tenant: &repository.Tenant{ID: "tenant-1", Slug: "agency"}},
+		middlewareUserRepoMock{},
+		auth.NewTokenManager("test-secret", time.Hour, 24*time.Hour),
+	)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(NewAuthMiddleware(service).Guard())
+	router.POST("/instance/setPresence/:instanceName", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/instance/setPresence/ventas", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
 func TestRequireRolesBlocksAgentFromAdminOnlyRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

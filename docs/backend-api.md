@@ -256,10 +256,13 @@ These routes bridge to the legacy instance model.
 | `PUT` | `/instance/:id/advanced-settings` | owner, admin | `{ alwaysOnline, rejectCall, msgRejectCall, readMessages, ignoreGroups, ignoreStatus }` | `{ message, settings, instance_id, instanceName, engine_instance_id }` | current tenant only |
 | `GET` | `/instance/id/:instanceID/advanced-settings` | owner, admin, agent | none | same as GET above | current tenant only |
 | `PUT` | `/instance/id/:instanceID/advanced-settings` | owner, admin | same body | same response | current tenant only |
+| `POST` | `/instance/setPresence/:instanceName` | owner, admin, agent | `{ presence }`, `{ state }`, or `{ alwaysOnline }` | Evolution-compatible `{ success, message, data }` | resolves `instanceName` in current tenant |
 
 Notes:
 
 - these settings are not persisted in the SaaS `instances` table today; they are stored in the bridged legacy instance model
+- `POST /instance/setPresence/:instanceName` exists for `n8n-nodes-evolution-api` compatibility. `available`, `online`, and boolean `true` map to `alwaysOnline=true`; `unavailable`, `offline`, and boolean `false` map to `alwaysOnline=false`.
+- Chat presence states such as `composing`, `paused`, and `recording` currently return `501` with `unsupported_chat_presence` from `cmd/api` because the tenant-safe SaaS runtime contract does not expose chat-presence writes yet.
 
 ### Instance-scoped integration routes
 
@@ -373,9 +376,31 @@ These routes were added because the current sibling frontend still calls manager
 |---|---|---|---|---|---|
 | `POST` | `/chat/findChats/:instanceName` | owner, admin, agent | `{ where? }` | same cache-aware runtime-backed `Chat[]` list as SaaS chat search | implemented |
 | `POST` | `/chat/findMessages/:instanceName` | owner, admin, agent | legacy-compatible message search payload | same `Message[]` history response as SaaS route | implemented |
-| `POST` | `/message/sendText/:instanceName` | owner, admin, agent | `{ number, text, options? }` | legacy-style `{ message, data }` success response | implemented |
-| `POST` | `/message/sendMedia/:instanceName` | owner, admin, agent | legacy-compatible media JSON payload | legacy-style `{ message, data }` success response | implemented |
-| `POST` | `/message/sendWhatsAppAudio/:instanceName` | owner, admin, agent | legacy-compatible audio JSON payload | legacy-style `{ message, data }` success response | implemented |
+| `POST` | `/message/presence/:instanceName` | owner, admin, agent | `{ presence }`, `{ state }`, or `{ alwaysOnline }` | Evolution-compatible `{ success, message, data }`; chat states return `501 unsupported_chat_presence` | implemented for online/offline |
+| `POST` | `/message/markread/:instanceName` | owner, admin, agent | `{ number, id }` | Evolution-compatible `501` envelope with `unsupported_markread` | registered unsupported |
+| `POST` | `/message/sendText/:instanceName` | owner, admin, agent | `{ number, text, options? }` | Evolution-compatible `{ success, message, data }` response | implemented |
+| `POST` | `/message/sendMedia/:instanceName` | owner, admin, agent | legacy-compatible media JSON payload | Evolution-compatible `{ success, message, data }` response | implemented |
+| `POST` | `/message/sendWhatsAppAudio/:instanceName` | owner, admin, agent | legacy-compatible audio JSON payload | Evolution-compatible `{ success, message, data }` response | implemented |
+
+Evolution compatibility success envelope:
+
+```json
+{
+  "success": true,
+  "message": "message sent successfully",
+  "data": {}
+}
+```
+
+Evolution compatibility error envelope:
+
+```json
+{
+  "success": false,
+  "message": "validation or runtime message",
+  "error": "machine-readable or detailed error"
+}
+```
 
 Partial response shape:
 

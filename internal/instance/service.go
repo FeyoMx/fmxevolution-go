@@ -859,6 +859,41 @@ func (s *Service) UpdateAdvancedSettings(ctx context.Context, tenantID, referenc
 	return updated, instance, nil
 }
 
+func (s *Service) SetAlwaysOnlineCompat(ctx context.Context, tenantID, reference string, alwaysOnline bool) (*legacyInstanceModel.AdvancedSettings, *repository.Instance, bool, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil && s.logger != nil {
+			s.logger.Warn("set alwaysOnline compat runtime unavailable", "instance_id", instance.ID, "reference", reference, "error", ensureErr)
+		}
+		return &legacyInstanceModel.AdvancedSettings{AlwaysOnline: alwaysOnline}, instance, false, nil
+	}
+
+	legacyRuntime, ok := runtime.(*LegacyRuntime)
+	if !ok {
+		if s.logger != nil {
+			s.logger.Warn("set alwaysOnline compat legacy runtime unavailable", "instance_id", instance.ID, "reference", reference)
+		}
+		return &legacyInstanceModel.AdvancedSettings{AlwaysOnline: alwaysOnline}, instance, false, nil
+	}
+
+	settings, err := legacyRuntime.GetAdvancedSettings(ctx, instance)
+	if err != nil || settings == nil {
+		settings = &legacyInstanceModel.AdvancedSettings{}
+	}
+	settings.AlwaysOnline = alwaysOnline
+
+	updated, _, err := s.UpdateAdvancedSettings(ctx, tenantID, reference, settings)
+	if err != nil {
+		return nil, instance, true, err
+	}
+	return updated, instance, true, nil
+}
+
 func (s *Service) SendText(ctx context.Context, tenantID, reference string, input SendTextInput) (*SendTextResult, *repository.Instance, error) {
 	instance, err := s.resolve(ctx, tenantID, reference)
 	if err != nil {

@@ -70,6 +70,11 @@
   - `/message/sendText/:instanceName`
   - `/message/sendMedia/:instanceName`
   - `/message/sendWhatsAppAudio/:instanceName`
+- Added Evolution API compatibility routes for n8n nodes:
+  - `/instance/setPresence/:instanceName`
+  - `/message/presence/:instanceName`
+  - `/message/markread/:instanceName`
+- Normalized the instance-name compatibility send routes to Evolution-style `{ success, message, data }` success envelopes and `{ success: false, message, error }` error envelopes.
 - Added live runtime-backed chat list support on:
   - `/instance/:id/chats/search`
   - `/instance/id/:instanceID/chats/search`
