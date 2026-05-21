@@ -98,7 +98,7 @@ Router legacy (`pkg/routes`):
 | POST | `/chat/findChats/:instanceName` | `LegacyFindChats` `internal/instance/compat_handler.go` | Compat | owner/admin/agent + rate limit | `{ where: { remoteJid?, query? } }` | Usa `instanceName`. |
 | POST | `/chat/findMessages/:instanceName` | `LegacyFindMessages` `internal/instance/compat_handler.go` | Compat | owner/admin/agent + rate limit | Message search JSON | Usa `instanceName`. |
 | POST | `/message/presence/:instanceName` | `LegacyChatPresence` `internal/instance/compat_handler.go` | Compat n8n | owner/admin/agent | `{ presence }`, `{ state }` o `{ alwaysOnline }` | Mismo comportamiento que `/instance/setPresence/:instanceName`. |
-| POST | `/message/markread/:instanceName` | `LegacyMarkRead` `internal/instance/compat_handler.go` | Compat n8n registrado | owner/admin/agent | `{ number, id }` | Devuelve `501` compatible con `success=false`, `error=unsupported_markread`. |
+| POST | `/message/markread/:instanceName` | `LegacyMarkRead` `internal/instance/compat_handler.go` | Compat n8n | owner/admin/agent | `{ number, id }`, `{ remoteJid, participant?, id, played? }` o `{ key: { id, remoteJid, participant? }, played? }` | Marca leido real con whatsmeow `MarkRead`; `played=true` envia receipt `played` para audio/PTT. |
 | POST | `/message/sendText/:instanceName` | `LegacySendText` `internal/instance/compat_handler.go` | Compat n8n | owner/admin/agent | `{ number, text, delay? }` | Responde envelope Evolution `{ success, message, data }`. |
 | POST | `/message/sendMedia/:instanceName` | `LegacySendMedia` `internal/instance/compat_handler.go` | Compat n8n | owner/admin/agent | Media JSON con `caption?` | Responde envelope Evolution `{ success, message, data }`. |
 | POST | `/message/sendWhatsAppAudio/:instanceName` | `LegacySendAudio` `internal/instance/compat_handler.go` | Compat n8n | owner/admin/agent | Audio JSON | Responde envelope Evolution `{ success, message, data }`. |
@@ -320,6 +320,8 @@ Content-Type: application/json
 | Compat enviar texto por nombre | POST | `{{$env.API_BASE_URL}}/message/sendText/{{$json.instanceName}}` | `{ "number": "5215512345678", "text": "Hola compat" }` |
 | Compat enviar media por nombre | POST | `{{$env.API_BASE_URL}}/message/sendMedia/{{$json.instanceName}}` | `{ "number": "5215512345678", "type": "image", "url": "https://example.com/image.jpg" }` |
 | Compat audio por nombre | POST | `{{$env.API_BASE_URL}}/message/sendWhatsAppAudio/{{$json.instanceName}}` | `{ "number": "5215512345678", "audio": "<base64-ogg>" }` |
+| Compat marcar leido por nombre | POST | `{{$env.API_BASE_URL}}/message/markread/{{$json.instanceName}}` | `{ "number": "5215512345678", "id": ["ABCD123"] }` |
+| Compat audio reproducido por nombre | POST | `{{$env.API_BASE_URL}}/message/markread/{{$json.instanceName}}` | `{ "key": { "id": "AUDIO1", "remoteJid": "5215512345678@s.whatsapp.net", "fromMe": false }, "played": true }` |
 
 ### Webhook en API actual
 

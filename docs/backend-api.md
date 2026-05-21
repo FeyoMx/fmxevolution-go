@@ -377,7 +377,7 @@ These routes were added because the current sibling frontend still calls manager
 | `POST` | `/chat/findChats/:instanceName` | owner, admin, agent | `{ where? }` | same cache-aware runtime-backed `Chat[]` list as SaaS chat search | implemented |
 | `POST` | `/chat/findMessages/:instanceName` | owner, admin, agent | legacy-compatible message search payload | same `Message[]` history response as SaaS route | implemented |
 | `POST` | `/message/presence/:instanceName` | owner, admin, agent | `{ presence }`, `{ state }`, or `{ alwaysOnline }` | Evolution-compatible `{ success, message, data }`; chat states return `501 unsupported_chat_presence` | implemented for online/offline |
-| `POST` | `/message/markread/:instanceName` | owner, admin, agent | `{ number, id }` | Evolution-compatible `501` envelope with `unsupported_markread` | registered unsupported |
+| `POST` | `/message/markread/:instanceName` | owner, admin, agent | `{ number, id }`, `{ remoteJid, participant?, id, played? }`, or `{ key: { id, remoteJid, participant?, fromMe? }, played? }` | Evolution-compatible `{ success, message, data: { count } }` response | implemented with whatsmeow `MarkRead` |
 | `POST` | `/message/sendText/:instanceName` | owner, admin, agent | `{ number, text, options? }` | Evolution-compatible `{ success, message, data }` response | implemented |
 | `POST` | `/message/sendMedia/:instanceName` | owner, admin, agent | legacy-compatible media JSON payload | Evolution-compatible `{ success, message, data }` response | implemented |
 | `POST` | `/message/sendWhatsAppAudio/:instanceName` | owner, admin, agent | legacy-compatible audio JSON payload | Evolution-compatible `{ success, message, data }` response | implemented |
@@ -391,6 +391,8 @@ Evolution compatibility success envelope:
   "data": {}
 }
 ```
+
+Mark-read compatibility sends real WhatsApp read receipts through the active whatsmeow client. For DMs, send either `number` plus `id` or `remoteJid` plus `id`. For groups, send `remoteJid` as the group JID and `participant` as the sender JID because whatsmeow needs all IDs in one call to belong to the same sender. Set `"played": true` for audio/PTT played receipts.
 
 Evolution compatibility error envelope:
 

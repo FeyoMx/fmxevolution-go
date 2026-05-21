@@ -74,6 +74,7 @@
   - `/instance/setPresence/:instanceName`
   - `/message/presence/:instanceName`
   - `/message/markread/:instanceName`
+- Implemented real double-blue-check mark-read support for `/message/markread/:instanceName` through the active whatsmeow client, including group `participant` senders and audio/PTT `played` receipts.
 - Normalized the instance-name compatibility send routes to Evolution-style `{ success, message, data }` success envelopes and `{ success: false, message, error }` error envelopes.
 - Added live runtime-backed chat list support on:
   - `/instance/:id/chats/search`

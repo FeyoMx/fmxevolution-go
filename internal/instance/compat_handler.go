@@ -150,25 +150,20 @@ func (h *Handler) LegacyChatPresence(c *gin.Context) {
 }
 
 func (h *Handler) LegacyMarkRead(c *gin.Context) {
-	identity, _ := domain.IdentityFromContext(c.Request.Context())
-	instance, err := h.service.Resolve(c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c))
+	input, err := decodeEvolutionMarkReadPayload(c.Request.Body)
 	if err != nil {
-		writeEvolutionCompatServiceError(c, err)
+		writeEvolutionCompatError(c, http.StatusBadRequest, "Failed to mark messages as read", err)
 		return
 	}
 
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"success": false,
-		"message": "markread is not implemented in cmd/api compatibility routes",
-		"error":   "unsupported_markread",
-		"data": gin.H{
-			"instance_id":        instance.ID,
-			"instanceName":       instance.Name,
-			"engine_instance_id": instance.EngineInstanceID,
-			"implemented":        false,
-			"code":               "unsupported_markread",
-		},
-	})
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	_, count, err := h.service.MarkReadCompat(c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c), input)
+	if err != nil {
+		writeEvolutionCompatMarkReadError(c, err)
+		return
+	}
+
+	writeEvolutionCompatSuccess(c, http.StatusOK, "Messages marked as read", gin.H{"count": count})
 }
 
 type evolutionPresencePayload struct {
@@ -253,6 +248,23 @@ func writeEvolutionCompatServiceError(c *gin.Context, err error) {
 		status = http.StatusConflict
 	}
 	writeEvolutionCompatError(c, status, err.Error(), err)
+}
+
+func writeEvolutionCompatMarkReadError(c *gin.Context, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, domain.ErrUnauthorized):
+		status = http.StatusUnauthorized
+	case errors.Is(err, domain.ErrForbidden):
+		status = http.StatusForbidden
+	case errors.Is(err, domain.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, domain.ErrValidation):
+		status = http.StatusBadRequest
+	case errors.Is(err, domain.ErrConflict):
+		status = http.StatusConflict
+	}
+	writeEvolutionCompatError(c, status, "Failed to mark messages as read", err)
 }
 
 func writeEvolutionCompatError(c *gin.Context, status int, message string, err error) {

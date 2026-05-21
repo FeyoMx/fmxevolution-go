@@ -115,6 +115,13 @@ type SendMediaResult struct {
 	MessageType string    `json:"messageType"`
 }
 
+type MarkReadInput struct {
+	IDs       []types.MessageID
+	ChatJID   types.JID
+	SenderJID types.JID
+	Played    bool
+}
+
 const (
 	sendTextTimeout         = 45 * time.Second
 	sendRetryDelay          = 3 * time.Second
@@ -320,6 +327,27 @@ func (r *LegacyRuntime) SendText(ctx context.Context, instance *repository.Insta
 	}
 
 	return nil, lastErr
+}
+
+func (r *LegacyRuntime) MarkRead(ctx context.Context, instance *repository.Instance, input MarkReadInput) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return err
+	}
+
+	client, err := r.ensureConnectedClient(legacyInstance)
+	if err != nil {
+		return err
+	}
+
+	if input.Played {
+		return client.MarkRead(ctx, input.IDs, time.Now(), input.ChatJID, input.SenderJID, types.ReceiptTypePlayed)
+	}
+	return client.MarkRead(ctx, input.IDs, time.Now(), input.ChatJID, input.SenderJID)
 }
 
 func (r *LegacyRuntime) SendMedia(ctx context.Context, instance *repository.Instance, input resolvedMediaMessageInput) (*SendMediaResult, error) {

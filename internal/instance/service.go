@@ -34,6 +34,10 @@ type Service struct {
 	logger               *slog.Logger
 }
 
+type markReadRuntime interface {
+	MarkRead(ctx context.Context, instance *repository.Instance, input MarkReadInput) error
+}
+
 const (
 	runtimeObservationMinInterval = 15 * time.Second
 	noisyLogMinInterval           = 30 * time.Second
@@ -892,6 +896,49 @@ func (s *Service) SetAlwaysOnlineCompat(ctx context.Context, tenantID, reference
 		return nil, instance, true, err
 	}
 	return updated, instance, true, nil
+}
+
+func (s *Service) MarkReadCompat(ctx context.Context, tenantID, reference string, input MarkReadInput) (*repository.Instance, int, error) {
+	instance, err := s.resolve(ctx, tenantID, reference)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(input.IDs) == 0 {
+		return instance, 0, fmt.Errorf("%w: at least one message id is required", domain.ErrValidation)
+	}
+	if input.ChatJID.IsEmpty() {
+		return instance, 0, fmt.Errorf("%w: remoteJid or number is required", domain.ErrValidation)
+	}
+
+	runtime, ensureErr := s.ensureRuntime()
+	if runtime == nil {
+		if ensureErr != nil {
+			return instance, 0, ensureErr
+		}
+		return instance, 0, fmt.Errorf("%w: runtime unavailable for markread", domain.ErrConflict)
+	}
+
+	markRuntime, ok := runtime.(markReadRuntime)
+	if !ok {
+		return instance, 0, fmt.Errorf("%w: legacy runtime unavailable for markread", domain.ErrConflict)
+	}
+
+	if err := markRuntime.MarkRead(ctx, instance, input); err != nil {
+		if s.logger != nil {
+			s.logger.Error(
+				"mark read failed",
+				"instance_id", instance.ID,
+				"reference", reference,
+				"chat_jid", input.ChatJID.String(),
+				"count", len(input.IDs),
+				"played", input.Played,
+				"error", err,
+			)
+		}
+		return instance, 0, err
+	}
+
+	return instance, len(input.IDs), nil
 }
 
 func (s *Service) SendText(ctx context.Context, tenantID, reference string, input SendTextInput) (*SendTextResult, *repository.Instance, error) {
