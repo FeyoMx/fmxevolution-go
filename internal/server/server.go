@@ -31,7 +31,7 @@ type Server struct {
 func New(cfg *config.Config, app *service.Application, logger *slog.Logger, db *sql.DB) *Server {
 	router := gin.New()
 	router.Use(gin.Recovery())
-	router.Use(middleware.CORS())
+	router.Use(middleware.CORS(cfg.Security.CORSAllowedOrigins...))
 	router.Use(middleware.RequestLogging(logger))
 
 	rateLimitStore := middleware.NewRateLimitStore(cfg.RateLimit.Backend)
@@ -71,7 +71,9 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger, db *
 
 	router.POST("/auth/login", authHandler.Login)
 	router.POST("/auth/refresh", authHandler.Refresh)
-	router.POST("/tenant", tenantHandler.Create)
+	// Tenant creation is a platform-level operation and must never be public.
+	// Gated behind PLATFORM_API_KEY (falls back to GLOBAL_API_KEY).
+	router.POST("/tenant", middleware.PlatformGuard(cfg.Security.PlatformAPIKey), tenantHandler.Create)
 
 	protected := router.Group("/")
 	protected.Use(middleware.NewAuthMiddleware(app.Auth).Guard())

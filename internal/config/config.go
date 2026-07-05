@@ -52,6 +52,15 @@ type AIConfig struct {
 	MemoryLimit  int
 }
 
+type SecurityConfig struct {
+	// PlatformAPIKey gates platform-level operations such as creating tenants.
+	// Falls back to GLOBAL_API_KEY when PLATFORM_API_KEY is unset.
+	PlatformAPIKey string
+	// CORSAllowedOrigins is the explicit allowlist of browser origins.
+	// Empty means "same-origin only" (no cross-origin credentials).
+	CORSAllowedOrigins []string
+}
+
 type Config struct {
 	AppEnv    string
 	LogLevel  string
@@ -61,6 +70,7 @@ type Config struct {
 	Broadcast BroadcastConfig
 	RateLimit RateLimitConfig
 	AI        AIConfig
+	Security  SecurityConfig
 }
 
 var (
@@ -110,6 +120,10 @@ func Load() (*Config, error) {
 				Timeout:      getDuration("AI_TIMEOUT", 15*time.Second),
 				Workers:      getInt("AI_WORKERS", 2),
 				MemoryLimit:  getInt("AI_MEMORY_LIMIT", 12),
+			},
+			Security: SecurityConfig{
+				PlatformAPIKey:     firstNonEmptyEnv("PLATFORM_API_KEY", "GLOBAL_API_KEY"),
+				CORSAllowedOrigins: getCSV("CORS_ALLOWED_ORIGINS"),
 			},
 		}
 
@@ -166,8 +180,13 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("LOG_LEVEL must be one of: debug, info, warn, error")
 	}
 
-	if strings.EqualFold(strings.TrimSpace(c.AppEnv), "production") && len(c.Auth.JWTSecret) < 32 {
-		return fmt.Errorf("JWT_SECRET must be at least 32 characters when APP_ENV=production")
+	if strings.EqualFold(strings.TrimSpace(c.AppEnv), "production") {
+		if len(c.Auth.JWTSecret) < 32 {
+			return fmt.Errorf("JWT_SECRET must be at least 32 characters when APP_ENV=production")
+		}
+		if len(strings.TrimSpace(c.Security.PlatformAPIKey)) < 16 {
+			return fmt.Errorf("PLATFORM_API_KEY (or GLOBAL_API_KEY) must be at least 16 characters when APP_ENV=production")
+		}
 	}
 
 	return nil
@@ -178,6 +197,30 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func getCSV(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func getInt(key string, fallback int) int {
