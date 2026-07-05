@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
@@ -327,6 +328,177 @@ func (r *LegacyRuntime) SendText(ctx context.Context, instance *repository.Insta
 	}
 
 	return nil, lastErr
+}
+
+// sendWAMessage sends an already-built waE2E.Message to a resolved recipient,
+// reusing the same connection handling and transient-retry logic as SendText.
+// It is the shared path for reaction/poll/contact/list/button sends.
+func (r *LegacyRuntime) sendWAMessage(ctx context.Context, instance *repository.Instance, number string, build func(recipient types.JID) (*waE2E.Message, error)) (*SendTextResult, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+
+	sendLock := r.sendLock(legacyInstance.Id)
+	sendLock.Lock()
+	defer sendLock.Unlock()
+
+	client, err := r.ensureConnectedClient(legacyInstance)
+	if err != nil {
+		return nil, err
+	}
+
+	recipient, err := r.resolveTextRecipient(client, legacyInstance, strings.TrimSpace(number))
+	if err != nil {
+		return nil, err
+	}
+
+	msg, err := build(recipient)
+	if err != nil {
+		return nil, err
+	}
+
+	messageID := whatsmeow.GenerateMessageID()
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(sendRetryDelay)
+			client, err = r.refreshConnectedClient(legacyInstance)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		sendCtx, cancel := context.WithTimeout(context.Background(), sendTextTimeout)
+		response, err := client.SendMessage(sendCtx, recipient, msg, whatsmeow.SendRequestExtra{ID: messageID})
+		cancel()
+		if err == nil {
+			return &SendTextResult{
+				MessageID: messageID,
+				ServerID:  int64(response.ServerID),
+				Chat:      recipient.String(),
+				FromMe:    true,
+				Timestamp: time.Now(),
+			}, nil
+		}
+
+		if errors.Is(sendCtx.Err(), context.DeadlineExceeded) {
+			lastErr = fmt.Errorf("%w: send message timed out after %s", domain.ErrTimeout, sendTextTimeout)
+			continue
+		}
+		lastErr = err
+		if !isTransientSendError(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+// SendReaction sends an emoji reaction to a specific message.
+func (r *LegacyRuntime) SendReaction(ctx context.Context, instance *repository.Instance, number, targetMessageID, reaction string, fromMe bool) (*SendTextResult, error) {
+	return r.sendWAMessage(ctx, instance, number, func(recipient types.JID) (*waE2E.Message, error) {
+		key := &waCommon.MessageKey{
+			RemoteJID: proto.String(recipient.String()),
+			FromMe:    proto.Bool(fromMe),
+			ID:        proto.String(strings.TrimSpace(targetMessageID)),
+		}
+		return &waE2E.Message{
+			ReactionMessage: &waE2E.ReactionMessage{
+				Key:               key,
+				Text:              proto.String(reaction),
+				SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
+			},
+		}, nil
+	})
+}
+
+// SendPoll sends a poll (single or multi-select) message.
+func (r *LegacyRuntime) SendPoll(ctx context.Context, instance *repository.Instance, number, name string, values []string, selectableCount int) (*SendTextResult, error) {
+	if strings.TrimSpace(name) == "" || len(values) == 0 {
+		return nil, fmt.Errorf("%w: poll name and at least one option are required", domain.ErrValidation)
+	}
+	if selectableCount <= 0 {
+		selectableCount = 1
+	}
+	return r.sendWAMessage(ctx, instance, number, func(_ types.JID) (*waE2E.Message, error) {
+		return r.client(instance).BuildPollCreation(name, values, selectableCount), nil
+	})
+}
+
+// SendContact sends one or more contact cards (vCards).
+func (r *LegacyRuntime) SendContact(ctx context.Context, instance *repository.Instance, number string, contacts []ContactCard) (*SendTextResult, error) {
+	if len(contacts) == 0 {
+		return nil, fmt.Errorf("%w: at least one contact is required", domain.ErrValidation)
+	}
+	return r.sendWAMessage(ctx, instance, number, func(_ types.JID) (*waE2E.Message, error) {
+		if len(contacts) == 1 {
+			return &waE2E.Message{ContactMessage: buildContactMessage(contacts[0])}, nil
+		}
+		arr := make([]*waE2E.ContactMessage, 0, len(contacts))
+		for _, ct := range contacts {
+			arr = append(arr, buildContactMessage(ct))
+		}
+		return &waE2E.Message{
+			ContactsArrayMessage: &waE2E.ContactsArrayMessage{
+				DisplayName: proto.String(contacts[0].FullName),
+				Contacts:    arr,
+			},
+		}, nil
+	})
+}
+
+// client returns the connected whatsmeow client for an instance (best-effort;
+// used by builders that need client-bound constructors like BuildPollCreation).
+func (r *LegacyRuntime) client(instance *repository.Instance) *whatsmeow.Client {
+	legacyInstance, err := r.ensureLegacyInstance(context.Background(), instance)
+	if err != nil {
+		return nil
+	}
+	client, _ := r.ensureConnectedClient(legacyInstance)
+	return client
+}
+
+// ContactCard is a normalized contact for sendContact.
+type ContactCard struct {
+	FullName     string
+	PhoneNumber  string
+	WUID         string
+	Organization string
+	Email        string
+	URL          string
+}
+
+func buildContactMessage(ct ContactCard) *waE2E.ContactMessage {
+	// Build a minimal but valid vCard 3.0.
+	var b strings.Builder
+	b.WriteString("BEGIN:VCARD\nVERSION:3.0\n")
+	b.WriteString("FN:" + ct.FullName + "\n")
+	if ct.Organization != "" {
+		b.WriteString("ORG:" + ct.Organization + "\n")
+	}
+	phone := strings.TrimSpace(ct.PhoneNumber)
+	wuid := strings.TrimSpace(ct.WUID)
+	if wuid == "" {
+		wuid = strings.TrimLeft(phone, "+")
+	}
+	if phone != "" {
+		b.WriteString("TEL;type=CELL;waid=" + wuid + ":" + phone + "\n")
+	}
+	if ct.Email != "" {
+		b.WriteString("EMAIL:" + ct.Email + "\n")
+	}
+	if ct.URL != "" {
+		b.WriteString("URL:" + ct.URL + "\n")
+	}
+	b.WriteString("END:VCARD")
+	return &waE2E.ContactMessage{
+		DisplayName: proto.String(ct.FullName),
+		Vcard:       proto.String(b.String()),
+	}
 }
 
 func (r *LegacyRuntime) MarkRead(ctx context.Context, instance *repository.Instance, input MarkReadInput) error {
@@ -1221,6 +1393,58 @@ func (r *LegacyRuntime) checkTextRecipientOnWhatsApp(client *whatsmeow.Client, p
 	}
 
 	return resp[0].JID.String(), true, nil
+}
+
+// NumberCheckResult is one entry of a whatsappNumbers check.
+type NumberCheckResult struct {
+	Number string `json:"number"`
+	Exists bool   `json:"exists"`
+	JID    string `json:"jid,omitempty"`
+}
+
+// CheckNumbers reports which of the given numbers are registered on WhatsApp.
+func (r *LegacyRuntime) CheckNumbers(ctx context.Context, instance *repository.Instance, numbers []string) ([]NumberCheckResult, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+	legacyInstance, err := r.ensureLegacyInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	client, err := r.ensureConnectedClient(legacyInstance)
+	if err != nil {
+		return nil, err
+	}
+
+	formatJID := true
+	prepared, err := utils.PrepareNumbersForWhatsAppCheck(numbers, &formatJID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", domain.ErrValidation, err)
+	}
+
+	resp, err := client.IsOnWhatsApp(ctx, prepared)
+	if err != nil {
+		return nil, err
+	}
+
+	byQuery := make(map[string]types.IsOnWhatsAppResponse, len(resp))
+	for _, item := range resp {
+		byQuery[strings.TrimLeft(item.Query, "+")] = item
+	}
+
+	out := make([]NumberCheckResult, 0, len(numbers))
+	for _, n := range numbers {
+		key := strings.TrimLeft(strings.TrimSpace(n), "+")
+		res := NumberCheckResult{Number: n}
+		if item, ok := byQuery[key]; ok {
+			res.Exists = item.IsIn
+			if item.IsIn {
+				res.JID = item.JID.String()
+			}
+		}
+		out = append(out, res)
+	}
+	return out, nil
 }
 
 func matchesChatFilter(record chatSearchRecord, filter chatSearchFilter) bool {

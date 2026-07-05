@@ -19,6 +19,9 @@ type evolutionMarkReadPayload struct {
 	ID          json.RawMessage        `json:"id"`
 	Key         *evolutionMarkReadKey  `json:"key"`
 	Options     map[string]interface{} `json:"options"`
+	// ReadMessages is the array form used by the n8n node's readMessages op:
+	// {"readMessages":[{"remoteJid":"...","fromMe":false,"id":"..."}]}
+	ReadMessages []evolutionMarkReadKey `json:"readMessages"`
 }
 
 type evolutionMarkReadKey struct {
@@ -33,6 +36,13 @@ func decodeEvolutionMarkReadPayload(reader io.Reader) (MarkReadInput, error) {
 	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(&payload); err != nil {
 		return MarkReadInput{}, fmt.Errorf("%w: invalid markread payload: %v", domain.ErrValidation, err)
+	}
+
+	// n8n node array form: promote the first readMessages entry into the flat
+	// fields the rest of this decoder understands.
+	if payload.Key == nil && strings.TrimSpace(payload.RemoteJID) == "" && len(payload.ReadMessages) > 0 {
+		first := payload.ReadMessages[0]
+		payload.Key = &first
 	}
 
 	ids, err := normalizeEvolutionMessageIDs(payload)
