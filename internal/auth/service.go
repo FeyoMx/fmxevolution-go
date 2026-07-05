@@ -13,6 +13,11 @@ const (
 	RoleOwner = "owner"
 	RoleAdmin = "admin"
 	RoleAgent = "agent"
+	// RoleOperator can operate instances day-to-day (send messages, connect,
+	// mark read) but cannot change tenant/instance configuration or users.
+	RoleOperator = "operator"
+	// RoleViewer is strictly read-only: dashboards, listings, status, history.
+	RoleViewer = "viewer"
 )
 
 type TenantFinder interface {

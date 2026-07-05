@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/ai"
+	"github.com/EvolutionAPI/evolution-go/internal/audit"
 	"github.com/EvolutionAPI/evolution-go/internal/auth"
 	"github.com/EvolutionAPI/evolution-go/internal/broadcast"
 	"github.com/EvolutionAPI/evolution-go/internal/config"
@@ -33,6 +34,7 @@ type Application struct {
 	Dashboard *dashboard.Service
 	Webhooks  *webhook.Service
 	AI        *ai.Service
+	Audit     *audit.Service
 }
 
 func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.Logger) *Application {
@@ -62,6 +64,7 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 		Dashboard: dashboard.NewService(stores.Instances, stores.CRM, stores.ConversationMessages, stores.Broadcasts, stores.RuntimeObservability),
 		Webhooks:  webhookService,
 		AI:        aiService,
+		Audit:     audit.NewService(stores.Audit, logger.With("module", "audit")),
 	}
 
 	if instanceTokenResolver, err := auth.NewLegacyInstanceTokenResolver(stores.Instances, cfg.Security.PlatformAPIKey); err != nil {
@@ -87,6 +90,7 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 func (a *Application) Start(ctx context.Context) {
 	a.Broadcast.Start(ctx)
 	a.AI.Start(ctx)
+	a.Audit.Start(ctx)
 }
 
 func (a *Application) Stop(ctx context.Context) error {
@@ -100,6 +104,9 @@ func (a *Application) Stop(ctx context.Context) error {
 		if err := a.AI.Stop(ctx); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if a.Audit != nil {
+		a.Audit.Stop(ctx)
 	}
 	return errors.Join(errs...)
 }
