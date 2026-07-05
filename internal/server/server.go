@@ -102,6 +102,9 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger, db *
 		protected.PUT("/ai/instances/:instanceID", middleware.RequireRoles(adminRoles...), aiHandler.ConfigureInstance)
 		protected.POST("/instance", middleware.RequireRoles(adminRoles...), instanceHandler.Create)
 		protected.GET("/instance", middleware.RequireRoles(readRoles...), instanceHandler.List)
+		// Evolution API v2 compatibility for the n8n node (also its credential test).
+		// Must be registered before "/instance/:id" so it is not captured as :id.
+		protected.GET("/instance/fetchInstances", middleware.RequireRoles(readRoles...), instanceHandler.LegacyFetchInstances)
 		protected.POST("/instance/setPresence/:instanceName", middleware.RequireRoles(opRoles...), instanceHandler.LegacySetPresence)
 		protected.GET("/instance/:id", middleware.RequireRoles(readRoles...), instanceHandler.Get)
 		protected.GET("/instance/:id/settings", middleware.RequireRoles(readRoles...), instanceHandler.Settings)
