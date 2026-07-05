@@ -91,6 +91,7 @@ func (a *Application) Start(ctx context.Context) {
 	a.Broadcast.Start(ctx)
 	a.AI.Start(ctx)
 	a.Audit.Start(ctx)
+	a.Webhooks.Start(ctx)
 }
 
 func (a *Application) Stop(ctx context.Context) error {
@@ -107,6 +108,11 @@ func (a *Application) Stop(ctx context.Context) error {
 	}
 	if a.Audit != nil {
 		a.Audit.Stop(ctx)
+	}
+	if a.Webhooks != nil {
+		if err := a.Webhooks.Stop(ctx); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }

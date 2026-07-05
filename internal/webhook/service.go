@@ -29,10 +29,14 @@ type aiTrigger interface {
 }
 
 type Service struct {
-	repo   repository.WebhookRepository
-	client HTTPClient
-	logger *slog.Logger
-	ai     aiTrigger
+	repo        repository.WebhookRepository
+	client      HTTPClient
+	logger      *slog.Logger
+	ai          aiTrigger
+	maxAttempts int
+	dedupeWindow time.Duration
+	stopWorker  context.CancelFunc
+	workerDone  chan struct{}
 }
 
 type CreateInput struct {
@@ -65,17 +69,22 @@ type DeliveryResult struct {
 	URL          string `json:"url"`
 	Delivered    bool   `json:"delivered"`
 	StatusCode   int    `json:"status_code"`
+	DeliveryID   string `json:"delivery_id,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
 
 type eventEnvelope struct {
-	TenantID   string         `json:"tenant_id"`
-	Direction  string         `json:"direction"`
-	EventType  string         `json:"event_type"`
-	InstanceID string         `json:"instance_id,omitempty"`
-	MessageID  string         `json:"message_id,omitempty"`
-	Timestamp  time.Time      `json:"timestamp"`
-	Data       map[string]any `json:"data"`
+	// EventID is stable across retries of the same dispatch so that consumers
+	// (n8n, Chatwoot bridges) can deduplicate deliveries.
+	EventID      string         `json:"event_id"`
+	TenantID     string         `json:"tenant_id"`
+	Direction    string         `json:"direction"`
+	EventType    string         `json:"event_type"`
+	RawEventType string         `json:"raw_event_type,omitempty"`
+	InstanceID   string         `json:"instance_id,omitempty"`
+	MessageID    string         `json:"message_id,omitempty"`
+	Timestamp    time.Time      `json:"timestamp"`
+	Data         map[string]any `json:"data"`
 }
 
 func NewService(repo repository.WebhookRepository, logger *slog.Logger) *Service {
@@ -88,7 +97,16 @@ func NewService(repo repository.WebhookRepository, logger *slog.Logger) *Service
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		logger: logger,
+		logger:       logger,
+		maxAttempts:  5,
+		dedupeWindow: 10 * time.Minute,
+	}
+}
+
+// SetMaxAttempts overrides the delivery attempt budget (sync try + retries).
+func (s *Service) SetMaxAttempts(attempts int) {
+	if attempts > 0 {
+		s.maxAttempts = attempts
 	}
 }
 
@@ -201,8 +219,22 @@ func (s *Service) DispatchOutbound(ctx context.Context, tenantID string, input D
 }
 
 func (s *Service) dispatch(ctx context.Context, tenantID, direction string, input DispatchInput) ([]DeliveryResult, error) {
-	if strings.TrimSpace(input.EventType) == "" {
+	rawEventType := strings.TrimSpace(input.EventType)
+	if rawEventType == "" {
 		return nil, fmt.Errorf("%w: event_type is required", domain.ErrValidation)
+	}
+	normalizedEventType := NormalizeEventType(rawEventType, direction, input.Data)
+	messageID := strings.TrimSpace(input.MessageID)
+
+	// Idempotency: for inbound message events carrying a message id, skip a
+	// re-dispatch of the same logical event within the dedupe window.
+	if direction == "inbound" && messageID != "" {
+		since := time.Now().Add(-s.dedupeWindow)
+		if seen, err := s.repo.HasRecentDelivery(ctx, tenantID, direction, normalizedEventType, messageID, since); err == nil && seen {
+			s.logger.Info("webhook dispatch deduplicated",
+				"tenant_id", tenantID, "event_type", normalizedEventType, "message_id", messageID)
+			return []DeliveryResult{}, nil
+		}
 	}
 
 	endpoints, err := s.repo.ListByTenant(ctx, tenantID)
@@ -210,14 +242,17 @@ func (s *Service) dispatch(ctx context.Context, tenantID, direction string, inpu
 		return nil, err
 	}
 
+	eventID := newEventID()
 	envelope := eventEnvelope{
-		TenantID:   tenantID,
-		Direction:  direction,
-		EventType:  strings.TrimSpace(input.EventType),
-		InstanceID: strings.TrimSpace(input.InstanceID),
-		MessageID:  strings.TrimSpace(input.MessageID),
-		Timestamp:  time.Now().UTC(),
-		Data:       input.Data,
+		EventID:      eventID,
+		TenantID:     tenantID,
+		Direction:    direction,
+		EventType:    normalizedEventType,
+		RawEventType: rawEventType,
+		InstanceID:   strings.TrimSpace(input.InstanceID),
+		MessageID:    messageID,
+		Timestamp:    time.Now().UTC(),
+		Data:         NormalizePayload(input, direction, normalizedEventType),
 	}
 
 	body, err := json.Marshal(envelope)
@@ -226,61 +261,129 @@ func (s *Service) dispatch(ctx context.Context, tenantID, direction string, inpu
 	}
 
 	results := make([]DeliveryResult, 0, len(endpoints))
-	for _, endpoint := range endpoints {
+	for i := range endpoints {
+		endpoint := endpoints[i]
 		if !shouldDeliver(endpoint, direction) {
 			continue
 		}
-		results = append(results, s.deliver(ctx, endpoint, envelope.EventType, direction, body))
+		results = append(results, s.deliver(ctx, endpoint, envelope, body))
 	}
 
 	return results, nil
 }
 
-func (s *Service) deliver(ctx context.Context, endpoint repository.WebhookEndpoint, eventType, direction string, body []byte) DeliveryResult {
+func (s *Service) deliver(ctx context.Context, endpoint repository.WebhookEndpoint, envelope eventEnvelope, body []byte) DeliveryResult {
 	result := DeliveryResult{
 		EndpointID:   endpoint.ID,
 		EndpointName: endpoint.Name,
 		URL:          endpoint.URL,
 	}
 
+	delivery := &repository.WebhookDelivery{
+		TenantID:    endpoint.TenantID,
+		EndpointID:  endpoint.ID,
+		EndpointURL: endpoint.URL,
+		Direction:   envelope.Direction,
+		EventType:   envelope.EventType,
+		EventID:     envelope.EventID,
+		MessageID:   envelope.MessageID,
+		Status:      "pending",
+		Attempts:    0,
+		MaxAttempts: s.maxAttempts,
+		RequestBody: string(body),
+	}
+
+	statusCode, respBody, sendErr := s.sendOnce(ctx, endpoint, envelope, body)
+	delivery.Attempts = 1
+	delivery.ResponseStatus = statusCode
+	delivery.ResponseBody = respBody
+	result.StatusCode = statusCode
+
+	if sendErr == nil && statusCode >= 200 && statusCode < 300 {
+		now := time.Now().UTC()
+		delivery.Status = "delivered"
+		delivery.DeliveredAt = &now
+		result.Delivered = true
+		s.logger.Info("webhook delivered",
+			"endpoint_id", endpoint.ID, "tenant_id", endpoint.TenantID,
+			"direction", envelope.Direction, "event_type", envelope.EventType, "status_code", statusCode)
+	} else {
+		result.Error = deliveryError(sendErr, respBody)
+		delivery.ErrorMessage = result.Error
+		s.scheduleRetryFields(delivery, 1)
+		s.logger.Warn("webhook delivery attempt failed",
+			"endpoint_id", endpoint.ID, "tenant_id", endpoint.TenantID,
+			"direction", envelope.Direction, "event_type", envelope.EventType,
+			"status_code", statusCode, "next_status", delivery.Status, "error", result.Error)
+	}
+
+	if err := s.repo.CreateDelivery(ctx, delivery); err != nil {
+		s.logger.Error("persist webhook delivery failed",
+			"endpoint_id", endpoint.ID, "tenant_id", endpoint.TenantID, "error", err)
+	}
+	result.DeliveryID = delivery.ID
+	return result
+}
+
+// sendOnce performs a single HTTP POST attempt and returns status/body/error.
+func (s *Service) sendOnce(ctx context.Context, endpoint repository.WebhookEndpoint, envelope eventEnvelope, body []byte) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.URL, bytes.NewReader(body))
 	if err != nil {
-		result.Error = err.Error()
-		return result
+		return 0, "", err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Evolution-Tenant-ID", endpoint.TenantID)
-	req.Header.Set("X-Evolution-Event-Type", eventType)
-	req.Header.Set("X-Evolution-Direction", direction)
+	req.Header.Set("X-Evolution-Event-Type", envelope.EventType)
+	req.Header.Set("X-Evolution-Direction", envelope.Direction)
+	req.Header.Set("X-Evolution-Event-ID", envelope.EventID)
 	if endpoint.SigningSecret != "" {
 		req.Header.Set("X-Evolution-Signature", signPayload(endpoint.SigningSecret, body))
 	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		result.Error = err.Error()
-		s.logger.Error("webhook delivery failed", "endpoint_id", endpoint.ID, "tenant_id", endpoint.TenantID, "direction", direction, "error", err)
-		return result
+		return 0, "", err
 	}
 	defer resp.Body.Close()
-
 	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	result.StatusCode = resp.StatusCode
-	result.Delivered = resp.StatusCode >= 200 && resp.StatusCode < 300
-	if !result.Delivered {
-		result.Error = string(responseBody)
+	return resp.StatusCode, string(responseBody), nil
+}
+
+// scheduleRetryFields sets status/next-attempt for a delivery that just failed
+// its attemptNumber-th attempt. Exponential backoff capped at 30m.
+func (s *Service) scheduleRetryFields(delivery *repository.WebhookDelivery, attemptNumber int) {
+	if attemptNumber >= delivery.MaxAttempts {
+		now := time.Now().UTC()
+		delivery.Status = "failed"
+		delivery.NextAttemptAt = nil
+		delivery.DeliveredAt = nil
+		_ = now
+		return
 	}
+	delivery.Status = "retrying"
+	next := time.Now().UTC().Add(backoffFor(attemptNumber))
+	delivery.NextAttemptAt = &next
+}
 
-	s.logger.Info("webhook delivered",
-		"endpoint_id", endpoint.ID,
-		"tenant_id", endpoint.TenantID,
-		"direction", direction,
-		"event_type", eventType,
-		"status_code", resp.StatusCode,
-	)
+func backoffFor(attemptNumber int) time.Duration {
+	// attempt 1 -> 30s, 2 -> 60s, 3 -> 120s, 4 -> 240s ... capped at 30m.
+	base := 30 * time.Second
+	d := base << (attemptNumber - 1)
+	if d > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return d
+}
 
-	return result
+func deliveryError(sendErr error, respBody string) string {
+	if sendErr != nil {
+		return sendErr.Error()
+	}
+	if respBody != "" {
+		return respBody
+	}
+	return "non-2xx response"
 }
 
 func shouldDeliver(endpoint repository.WebhookEndpoint, direction string) bool {

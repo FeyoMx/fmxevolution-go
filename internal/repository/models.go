@@ -268,20 +268,30 @@ type WebhookEndpoint struct {
 	UpdatedAt       time.Time
 }
 
+// WebhookDelivery tracks each outgoing webhook attempt lifecycle:
+// pending -> delivered | retrying -> delivered | failed (after max attempts).
+// EventID is stable across retries so consumers can deduplicate; MessageID
+// enables inbound dedupe (same message dispatched twice within a window).
 type WebhookDelivery struct {
-	ID             string `gorm:"type:uuid;primaryKey"`
-	TenantID       string `gorm:"type:uuid;index;not null"`
-	EndpointID     string `gorm:"type:uuid;index;not null"`
-	Direction      string `gorm:"size:50;index;not null"`
-	EventType      string `gorm:"size:100;index;not null"`
-	Status         string `gorm:"size:50;index;not null"`
-	ResponseStatus int
-	RequestBody    string `gorm:"type:text;not null"`
-	ResponseBody   string `gorm:"type:text"`
-	ErrorMessage   string `gorm:"type:text"`
-	DeliveredAt    *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID             string `json:"id" gorm:"type:uuid;primaryKey"`
+	TenantID       string `json:"tenant_id" gorm:"type:uuid;index;not null"`
+	EndpointID     string `json:"endpoint_id" gorm:"type:uuid;index;not null"`
+	EndpointURL    string `json:"endpoint_url" gorm:"size:500"`
+	Direction      string `json:"direction" gorm:"size:50;index;not null"`
+	EventType      string `json:"event_type" gorm:"size:100;index;not null"`
+	EventID        string `json:"event_id" gorm:"size:64;index"`
+	MessageID      string `json:"message_id" gorm:"size:255;index:idx_webhook_deliveries_dedupe"`
+	Status         string `json:"status" gorm:"size:50;index;not null"`
+	Attempts       int    `json:"attempts" gorm:"not null;default:0"`
+	MaxAttempts    int    `json:"max_attempts" gorm:"not null;default:5"`
+	ResponseStatus int    `json:"response_status"`
+	RequestBody    string `json:"-" gorm:"type:text;not null"`
+	ResponseBody   string `json:"-" gorm:"type:text"`
+	ErrorMessage   string `json:"error_message" gorm:"type:text"`
+	NextAttemptAt  *time.Time `json:"next_attempt_at" gorm:"index"`
+	DeliveredAt    *time.Time `json:"delivered_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // AuditLog records security-relevant actions (sends, connects, deletions,

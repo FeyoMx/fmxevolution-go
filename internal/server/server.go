@@ -240,6 +240,7 @@ func New(cfg *config.Config, app *service.Application, logger *slog.Logger, db *
 		protected.GET("/broadcast/:id/recipients", middleware.RequireRoles(readRoles...), broadcastLimiter.Middleware(), broadcastHandler.ListRecipients)
 		protected.GET("/webhook", middleware.RequireRoles(readRoles...), webhookHandler.List)
 		protected.POST("/webhook", middleware.RequireRoles(adminRoles...), webhookHandler.Create)
+		protected.GET("/webhook/deliveries", middleware.RequireRoles(readRoles...), webhookHandler.ListDeliveries)
 		protected.GET("/webhook/:id", middleware.RequireRoles(readRoles...), webhookHandler.Get)
 		protected.POST("/webhook/inbound", middleware.RequireRoles(opRoles...), webhookLimiter.Middleware(), webhookHandler.DispatchInbound)
 		protected.POST("/webhook/outbound", middleware.RequireRoles(opRoles...), webhookLimiter.Middleware(), webhookHandler.DispatchOutbound)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
 	"github.com/EvolutionAPI/evolution-go/internal/repository"
@@ -27,6 +28,26 @@ func (r *recordingWebhookRepo) GetByID(context.Context, string, string) (*reposi
 }
 
 func (r *recordingWebhookRepo) ListByTenant(context.Context, string) ([]repository.WebhookEndpoint, error) {
+	return nil, nil
+}
+
+func (r *recordingWebhookRepo) CreateDelivery(context.Context, *repository.WebhookDelivery) error {
+	return nil
+}
+
+func (r *recordingWebhookRepo) UpdateDelivery(context.Context, *repository.WebhookDelivery) error {
+	return nil
+}
+
+func (r *recordingWebhookRepo) ListDeliveries(context.Context, string, repository.WebhookDeliveryFilter) ([]repository.WebhookDelivery, error) {
+	return nil, nil
+}
+
+func (r *recordingWebhookRepo) HasRecentDelivery(context.Context, string, string, string, string, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (r *recordingWebhookRepo) ListDueRetries(context.Context, time.Time, int) ([]repository.WebhookDelivery, error) {
 	return nil, nil
 }
 

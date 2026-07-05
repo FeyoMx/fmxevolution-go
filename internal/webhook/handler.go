@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/EvolutionAPI/evolution-go/internal/domain"
@@ -85,6 +86,35 @@ func (h *Handler) Get(c *gin.Context) {
 		return
 	}
 	sharedhandler.WriteJSON(c, http.StatusOK, endpoint)
+}
+
+// ListDeliveries returns the tenant's webhook delivery log (newest first).
+// Query params: endpoint_id, status (pending|delivered|retrying|failed),
+// event_type, limit (<=500, default 100), offset.
+func (h *Handler) ListDeliveries(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	filter := repository.WebhookDeliveryFilter{
+		EndpointID: strings.TrimSpace(c.Query("endpoint_id")),
+		Status:     strings.TrimSpace(c.Query("status")),
+		EventType:  strings.TrimSpace(c.Query("event_type")),
+	}
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			filter.Limit = parsed
+		}
+	}
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			filter.Offset = parsed
+		}
+	}
+
+	deliveries, err := h.service.ListDeliveries(c.Request.Context(), identity.TenantID, filter)
+	if err != nil {
+		sharedhandler.WriteError(c, err)
+		return
+	}
+	sharedhandler.WriteJSON(c, http.StatusOK, gin.H{"items": deliveries, "count": len(deliveries)})
 }
 
 func (h *Handler) handleLegacyInstanceWebhookList(c *gin.Context) bool {
