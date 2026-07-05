@@ -79,6 +79,126 @@ func evolutionInstanceView(inst repository.Instance) gin.H {
 	}
 }
 
+// ---- Fase B: rich message operations (Evolution API v2 node bodies) ----
+
+type reactionPayload struct {
+	Key struct {
+		RemoteJID string `json:"remoteJid"`
+		FromMe    bool   `json:"fromMe"`
+		ID        string `json:"id"`
+	} `json:"key"`
+	Reaction string `json:"reaction"`
+}
+
+// LegacySendReaction implements POST /message/sendReaction/{instance}.
+func (h *Handler) LegacySendReaction(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	var p reactionPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		writeEvolutionCompatError(c, http.StatusBadRequest, "invalid reaction payload; key and reaction are required", err)
+		return
+	}
+	result, instance, err := h.service.SendReaction(
+		c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c),
+		p.Key.RemoteJID, p.Key.ID, p.Reaction, p.Key.FromMe,
+	)
+	if err != nil {
+		writeEvolutionCompatServiceError(c, err)
+		return
+	}
+	writeEvolutionCompatSuccess(c, http.StatusOK, "reaction sent successfully", buildLegacySendData(instance, result))
+}
+
+type pollPayload struct {
+	Number          string   `json:"number"`
+	Name            string   `json:"name"`
+	Values          []string `json:"values"`
+	SelectableCount int      `json:"selectableCount"`
+}
+
+// LegacySendPoll implements POST /message/sendPoll/{instance}.
+func (h *Handler) LegacySendPoll(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	var p pollPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		writeEvolutionCompatError(c, http.StatusBadRequest, "invalid poll payload; number, name and values are required", err)
+		return
+	}
+	result, instance, err := h.service.SendPoll(
+		c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c),
+		p.Number, p.Name, p.Values, p.SelectableCount,
+	)
+	if err != nil {
+		writeEvolutionCompatServiceError(c, err)
+		return
+	}
+	writeEvolutionCompatSuccess(c, http.StatusOK, "poll sent successfully", buildLegacySendData(instance, result))
+}
+
+type contactPayload struct {
+	Number  string `json:"number"`
+	Contact []struct {
+		FullName     string `json:"fullName"`
+		WUID         string `json:"wuid"`
+		PhoneNumber  string `json:"phoneNumber"`
+		Organization string `json:"organization"`
+		Email        string `json:"email"`
+		URL          string `json:"url"`
+	} `json:"contact"`
+}
+
+// LegacySendContact implements POST /message/sendContact/{instance}.
+func (h *Handler) LegacySendContact(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	var p contactPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		writeEvolutionCompatError(c, http.StatusBadRequest, "invalid contact payload; number and contact are required", err)
+		return
+	}
+	cards := make([]ContactCard, 0, len(p.Contact))
+	for _, ct := range p.Contact {
+		cards = append(cards, ContactCard{
+			FullName:     ct.FullName,
+			PhoneNumber:  ct.PhoneNumber,
+			WUID:         ct.WUID,
+			Organization: ct.Organization,
+			Email:        ct.Email,
+			URL:          ct.URL,
+		})
+	}
+	result, instance, err := h.service.SendContact(
+		c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c), p.Number, cards,
+	)
+	if err != nil {
+		writeEvolutionCompatServiceError(c, err)
+		return
+	}
+	writeEvolutionCompatSuccess(c, http.StatusOK, "contact sent successfully", buildLegacySendData(instance, result))
+}
+
+type whatsappNumbersPayload struct {
+	Numbers []string `json:"numbers"`
+}
+
+// LegacyCheckNumbers implements POST /chat/whatsappNumbers/{instance}.
+func (h *Handler) LegacyCheckNumbers(c *gin.Context) {
+	identity, _ := domain.IdentityFromContext(c.Request.Context())
+	var p whatsappNumbersPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		writeEvolutionCompatError(c, http.StatusBadRequest, "invalid payload; numbers[] is required", err)
+		return
+	}
+	results, _, err := h.service.CheckNumbers(
+		c.Request.Context(), identity.TenantID, legacyInstanceReferenceFromParams(c), p.Numbers,
+	)
+	if err != nil {
+		writeEvolutionCompatServiceError(c, err)
+		return
+	}
+	// The node expects a plain array of {number, exists, jid}.
+	c.JSON(http.StatusOK, results)
+}
+
 // evolutionConnectionStatus maps our internal status values to the v2
 // connectionStatus vocabulary the node understands (open|connecting|close).
 func evolutionConnectionStatus(status string) string {
