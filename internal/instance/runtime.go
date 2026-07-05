@@ -1416,31 +1416,26 @@ func (r *LegacyRuntime) CheckNumbers(ctx context.Context, instance *repository.I
 		return nil, err
 	}
 
+	// Check numbers one at a time so we can reliably map each result back to the
+	// caller's input. IsOnWhatsApp's Query field is normalized by the server and
+	// does not always match the input string, so per-number calls are the robust
+	// mapping strategy for a webhook-style check.
 	formatJID := true
-	prepared, err := utils.PrepareNumbersForWhatsAppCheck(numbers, &formatJID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", domain.ErrValidation, err)
-	}
-
-	resp, err := client.IsOnWhatsApp(ctx, prepared)
-	if err != nil {
-		return nil, err
-	}
-
-	byQuery := make(map[string]types.IsOnWhatsAppResponse, len(resp))
-	for _, item := range resp {
-		byQuery[strings.TrimLeft(item.Query, "+")] = item
-	}
-
 	out := make([]NumberCheckResult, 0, len(numbers))
 	for _, n := range numbers {
-		key := strings.TrimLeft(strings.TrimSpace(n), "+")
 		res := NumberCheckResult{Number: n}
-		if item, ok := byQuery[key]; ok {
-			res.Exists = item.IsIn
-			if item.IsIn {
-				res.JID = item.JID.String()
-			}
+		prepared, err := utils.PrepareNumbersForWhatsAppCheck([]string{n}, &formatJID)
+		if err != nil || len(prepared) == 0 {
+			out = append(out, res)
+			continue
+		}
+		resp, err := client.IsOnWhatsApp(ctx, prepared)
+		if err != nil {
+			return nil, err
+		}
+		if len(resp) > 0 && resp[0].IsIn {
+			res.Exists = true
+			res.JID = resp[0].JID.String()
 		}
 		out = append(out, res)
 	}

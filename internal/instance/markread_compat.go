@@ -111,6 +111,15 @@ func normalizeEvolutionChatJID(payload evolutionMarkReadPayload) (types.JID, err
 		rawJID = strings.TrimSpace(payload.Key.RemoteJID)
 	}
 	if rawJID != "" {
+		// The n8n node sends remoteJid as a bare number (e.g. "5216562938493").
+		// Treat a "@"-less value as a phone number rather than a full JID.
+		if !strings.Contains(rawJID, "@") {
+			digits := digitsOnly(rawJID)
+			if digits == "" {
+				return types.EmptyJID, fmt.Errorf("%w: remoteJid must contain digits", domain.ErrValidation)
+			}
+			return types.NewJID(digits, types.DefaultUserServer), nil
+		}
 		return parseEvolutionJID(rawJID, "remoteJid")
 	}
 
