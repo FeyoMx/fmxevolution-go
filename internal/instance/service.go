@@ -757,6 +757,12 @@ func (s *Service) SetWebhook(ctx context.Context, tenantID, reference, webhookUR
 					s.logger.Warn("persist legacy webhook settings failed", "instance_id", instance.ID, "error", err)
 				}
 			}
+
+			// Hot-reload the running client so an already-connected instance picks
+			// up the new webhook URL/events immediately, without needing a
+			// reconnect or restart. Without this, the engine keeps dispatching to
+			// the webhook URL cached at connect time.
+			s.syncLegacyInstanceSettings(instance, legacyRuntime)
 		}
 	}
 
