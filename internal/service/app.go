@@ -64,7 +64,7 @@ func NewApplication(stores *repository.Stores, cfg *config.Config, logger *slog.
 		AI:        aiService,
 	}
 
-	if instanceTokenResolver, err := auth.NewLegacyInstanceTokenResolver(stores.Instances); err != nil {
+	if instanceTokenResolver, err := auth.NewLegacyInstanceTokenResolver(stores.Instances, cfg.Security.PlatformAPIKey); err != nil {
 		logger.Warn("legacy instance token auth unavailable", "error", err)
 	} else {
 		app.Auth.SetInstanceTokenResolver(instanceTokenResolver)

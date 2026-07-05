@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"strings"
 
@@ -16,12 +17,19 @@ type instanceFinder interface {
 	FindByName(ctx context.Context, name string) (*repository.Instance, error)
 }
 
+// minInstanceTokenLength rejects trivially short or empty tokens before they are
+// ever used in a database lookup, closing off blank/placeholder tokens.
+const minInstanceTokenLength = 16
+
 type LegacyInstanceTokenResolver struct {
 	instances  instanceFinder
 	legacyRepo legacyInstanceRepo.InstanceRepository
+	// platformKey is never a valid instance token. Rejecting it here means a
+	// leaked GLOBAL/PLATFORM key cannot be replayed as an instance credential.
+	platformKey string
 }
 
-func NewLegacyInstanceTokenResolver(instances instanceFinder) (*LegacyInstanceTokenResolver, error) {
+func NewLegacyInstanceTokenResolver(instances instanceFinder, platformKey string) (*LegacyInstanceTokenResolver, error) {
 	cfg := pkgconfig.Load()
 	db, err := cfg.CreateUsersDB()
 	if err != nil {
@@ -29,8 +37,9 @@ func NewLegacyInstanceTokenResolver(instances instanceFinder) (*LegacyInstanceTo
 	}
 
 	return &LegacyInstanceTokenResolver{
-		instances:  instances,
-		legacyRepo: legacyInstanceRepo.NewInstanceRepository(db),
+		instances:   instances,
+		legacyRepo:  legacyInstanceRepo.NewInstanceRepository(db),
+		platformKey: strings.TrimSpace(platformKey),
 	}, nil
 }
 
@@ -40,8 +49,13 @@ func (r *LegacyInstanceTokenResolver) Resolve(ctx context.Context, token string)
 	}
 
 	token = strings.TrimSpace(token)
-	if token == "" {
-		return nil, fmt.Errorf("%w: missing instance token", domain.ErrUnauthorized)
+	if len(token) < minInstanceTokenLength {
+		return nil, fmt.Errorf("%w: missing or malformed instance token", domain.ErrUnauthorized)
+	}
+
+	// Defense in depth: the platform/global key must never resolve to an instance.
+	if r.platformKey != "" && subtle.ConstantTimeCompare([]byte(token), []byte(r.platformKey)) == 1 {
+		return nil, fmt.Errorf("%w: platform key is not a valid instance token", domain.ErrUnauthorized)
 	}
 
 	legacyInstance, err := r.legacyRepo.GetInstanceByToken(token)
