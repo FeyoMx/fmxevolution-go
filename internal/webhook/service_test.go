@@ -13,22 +13,53 @@ import (
 )
 
 type webhookRepoMock struct {
-	endpoints []repository.WebhookEndpoint
+	endpoints  []repository.WebhookEndpoint
+	deliveries []repository.WebhookDelivery
+	recentHit  bool
 }
 
-func (m webhookRepoMock) Create(context.Context, *repository.WebhookEndpoint) error {
+func (m *webhookRepoMock) Create(context.Context, *repository.WebhookEndpoint) error {
 	return nil
 }
 
-func (m webhookRepoMock) GetByID(context.Context, string, string) (*repository.WebhookEndpoint, error) {
+func (m *webhookRepoMock) GetByID(context.Context, string, string) (*repository.WebhookEndpoint, error) {
 	if len(m.endpoints) == 0 {
 		return nil, errNotFound()
 	}
 	return &m.endpoints[0], nil
 }
 
-func (m webhookRepoMock) ListByTenant(context.Context, string) ([]repository.WebhookEndpoint, error) {
+func (m *webhookRepoMock) ListByTenant(context.Context, string) ([]repository.WebhookEndpoint, error) {
 	return m.endpoints, nil
+}
+
+func (m *webhookRepoMock) CreateDelivery(_ context.Context, d *repository.WebhookDelivery) error {
+	if d.ID == "" {
+		d.ID = "delivery-" + d.EndpointID
+	}
+	m.deliveries = append(m.deliveries, *d)
+	return nil
+}
+
+func (m *webhookRepoMock) UpdateDelivery(_ context.Context, d *repository.WebhookDelivery) error {
+	for i := range m.deliveries {
+		if m.deliveries[i].ID == d.ID {
+			m.deliveries[i] = *d
+		}
+	}
+	return nil
+}
+
+func (m *webhookRepoMock) ListDeliveries(context.Context, string, repository.WebhookDeliveryFilter) ([]repository.WebhookDelivery, error) {
+	return m.deliveries, nil
+}
+
+func (m *webhookRepoMock) HasRecentDelivery(context.Context, string, string, string, string, time.Time) (bool, error) {
+	return m.recentHit, nil
+}
+
+func (m *webhookRepoMock) ListDueRetries(context.Context, time.Time, int) ([]repository.WebhookDelivery, error) {
+	return nil, nil
 }
 
 func TestDispatchInboundSignsAndFiltersEndpoints(t *testing.T) {
@@ -48,7 +79,7 @@ func TestDispatchInboundSignsAndFiltersEndpoints(t *testing.T) {
 	}))
 	defer server.Close()
 
-	service := NewService(webhookRepoMock{
+	service := NewService(&webhookRepoMock{
 		endpoints: []repository.WebhookEndpoint{
 			{
 				ID:             "endpoint-1",
@@ -112,7 +143,7 @@ func TestDispatchInboundPublishesConversationFallback(t *testing.T) {
 		}
 	})
 
-	service := NewService(webhookRepoMock{}, nilLogger())
+	service := NewService(&webhookRepoMock{}, nilLogger())
 
 	_, err := service.DispatchInbound(context.Background(), "tenant-1", DispatchInput{
 		EventType:  "message.received",

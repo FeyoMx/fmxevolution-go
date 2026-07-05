@@ -95,10 +95,29 @@ type BroadcastRecipientProgressFilter struct {
 	Limit  int
 }
 
+type WebhookDeliveryFilter struct {
+	EndpointID string
+	Status     string
+	EventType  string
+	Limit      int
+	Offset     int
+}
+
 type WebhookRepository interface {
 	Create(ctx context.Context, endpoint *WebhookEndpoint) error
 	GetByID(ctx context.Context, tenantID, endpointID string) (*WebhookEndpoint, error)
 	ListByTenant(ctx context.Context, tenantID string) ([]WebhookEndpoint, error)
+
+	CreateDelivery(ctx context.Context, delivery *WebhookDelivery) error
+	UpdateDelivery(ctx context.Context, delivery *WebhookDelivery) error
+	ListDeliveries(ctx context.Context, tenantID string, filter WebhookDeliveryFilter) ([]WebhookDelivery, error)
+	// HasRecentDelivery reports whether the same logical event (direction +
+	// event type + message id) was already dispatched for the tenant since the
+	// given time. Used for inbound idempotency.
+	HasRecentDelivery(ctx context.Context, tenantID, direction, eventType, messageID string, since time.Time) (bool, error)
+	// ListDueRetries returns deliveries across all tenants whose next attempt
+	// is due, for the background retry worker.
+	ListDueRetries(ctx context.Context, now time.Time, limit int) ([]WebhookDelivery, error)
 }
 
 type AuditLogFilter struct {

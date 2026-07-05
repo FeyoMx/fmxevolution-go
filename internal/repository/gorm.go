@@ -884,6 +884,61 @@ func (r *gormWebhookRepository) ListByTenant(ctx context.Context, tenantID strin
 	return endpoints, err
 }
 
+func (r *gormWebhookRepository) CreateDelivery(ctx context.Context, delivery *WebhookDelivery) error {
+	return r.db.WithContext(ctx).Create(delivery).Error
+}
+
+func (r *gormWebhookRepository) UpdateDelivery(ctx context.Context, delivery *WebhookDelivery) error {
+	return r.db.WithContext(ctx).Save(delivery).Error
+}
+
+func (r *gormWebhookRepository) ListDeliveries(ctx context.Context, tenantID string, filter WebhookDeliveryFilter) ([]WebhookDelivery, error) {
+	query := r.db.WithContext(ctx).Where("tenant_id = ?", tenantID)
+	if filter.EndpointID != "" {
+		query = query.Where("endpoint_id = ?", filter.EndpointID)
+	}
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.EventType != "" {
+		query = query.Where("event_type = ?", filter.EventType)
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	if filter.Offset > 0 {
+		query = query.Offset(filter.Offset)
+	}
+
+	var deliveries []WebhookDelivery
+	err := query.Order("created_at DESC").Limit(limit).Find(&deliveries).Error
+	return deliveries, err
+}
+
+func (r *gormWebhookRepository) HasRecentDelivery(ctx context.Context, tenantID, direction, eventType, messageID string, since time.Time) (bool, error) {
+	if messageID == "" {
+		return false, nil
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Model(&WebhookDelivery{}).
+		Where("tenant_id = ? AND direction = ? AND event_type = ? AND message_id = ? AND created_at >= ?",
+			tenantID, direction, eventType, messageID, since).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (r *gormWebhookRepository) ListDueRetries(ctx context.Context, now time.Time, limit int) ([]WebhookDelivery, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var deliveries []WebhookDelivery
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?", "retrying", now).
+		Order("next_attempt_at ASC").Limit(limit).Find(&deliveries).Error
+	return deliveries, err
+}
+
 type gormAuditRepository struct{ db *gorm.DB }
 
 func (r *gormAuditRepository) Create(ctx context.Context, entry *AuditLog) error {
