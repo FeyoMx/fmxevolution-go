@@ -69,7 +69,7 @@ func TestCreateJID(t *testing.T) {
 		{
 			name:     "MX number with extra digit - should remove",
 			input:    "5215551234567",
-			expected: "+52551234567@s.whatsapp.net",
+			expected: "+525551234567@s.whatsapp.net",
 			hasError: false,
 		},
 		{
@@ -178,14 +178,24 @@ func TestFormatMXOrARNumber(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "MX number with 13 digits",
+			name:     "MX number with 13 digits drops only the legacy 1",
 			input:    "5215551234567",
-			expected: "52551234567",
+			expected: "525551234567",
 		},
 		{
-			name:     "MX number with 12 digits",
+			name:     "MX real number 6562938493",
+			input:    "5216562938493",
+			expected: "526562938493",
+		},
+		{
+			name:     "MX number with 12 digits unchanged",
 			input:    "525551234567",
 			expected: "525551234567",
+		},
+		{
+			name:     "MX 13 digits without leading 1 is left untouched",
+			input:    "5265629384931",
+			expected: "5265629384931",
 		},
 		{
 			name:     "AR number with 13 digits",

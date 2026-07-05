@@ -132,9 +132,14 @@ func formatMXOrARNumber(jid string) string {
 
 	// Check if it's MX (52) or AR (54)
 	if countryCode == "52" && len(jid) == 13 {
-		// Mexico: remove 2 digits (positions 2-3)
-		// 5215551234567 -> 52 + 551234567 = 52551234567
-		return countryCode + jid[4:]
+		// Mexico: a 13-digit 52 number carries the legacy mobile "1" right after
+		// the country code (52 + 1 + 10-digit national number). WhatsApp expects
+		// 52 + the 10-digit national number, so drop ONLY that "1" at index 2.
+		// 5216562938493 -> 52 + 6562938493 = 526562938493
+		if jid[2] == '1' {
+			return countryCode + jid[3:]
+		}
+		return jid
 	} else if countryCode == "54" && len(jid) == 13 {
 		// Argentina: remove 1 digit (position 2)
 		// 5411123456789 -> 54 + 11123456789 = 5411123456789
