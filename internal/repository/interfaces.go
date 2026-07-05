@@ -101,6 +101,17 @@ type WebhookRepository interface {
 	ListByTenant(ctx context.Context, tenantID string) ([]WebhookEndpoint, error)
 }
 
+type AuditLogFilter struct {
+	Action string
+	Limit  int
+	Offset int
+}
+
+type AuditRepository interface {
+	Create(ctx context.Context, entry *AuditLog) error
+	ListByTenant(ctx context.Context, tenantID string, filter AuditLogFilter) ([]AuditLog, error)
+}
+
 type AIRepository interface {
 	Upsert(ctx context.Context, settings *AISettings) error
 	GetByTenant(ctx context.Context, tenantID string) (*AISettings, error)

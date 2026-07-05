@@ -163,6 +163,35 @@ func WebhookRateLimitPolicy(limit int) RateLimitPolicy {
 	}
 }
 
+func LoginRateLimitPolicy(limit int) RateLimitPolicy {
+	return RateLimitPolicy{
+		Name:   "login_per_minute",
+		Limit:  limit,
+		Window: time.Minute,
+	}
+}
+
+// MiddlewareByIP limits by client IP. Meant for unauthenticated routes such as
+// /auth/login where no tenant identity exists yet (brute-force protection).
+func (r *RateLimiter) MiddlewareByIP() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		key := scopedRateLimitKey(r.policy.Name, "ip", c.ClientIP())
+		decision, err := r.store.Allow(c.Request.Context(), key, r.policy.Limit, r.policy.Window)
+		if err != nil {
+			sharedhandler.WriteError(c, err)
+			c.Abort()
+			return
+		}
+		decision.Scope = "ip"
+		decision.Policy = r.policy.Name
+		if !decision.Allowed {
+			abortRateLimited(c, decision)
+			return
+		}
+		c.Next()
+	}
+}
+
 func (r *RateLimiter) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		identity := MustIdentity(c)

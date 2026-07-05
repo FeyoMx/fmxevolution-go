@@ -284,6 +284,25 @@ type WebhookDelivery struct {
 	UpdatedAt      time.Time
 }
 
+// AuditLog records security-relevant actions (sends, connects, deletions,
+// config changes) for tenant-facing accountability and incident forensics.
+// Rows are append-only; there is no update/delete API by design.
+type AuditLog struct {
+	ID         string    `json:"id" gorm:"type:uuid;primaryKey"`
+	TenantID   string    `json:"tenant_id" gorm:"type:uuid;index:idx_audit_logs_lookup,priority:1;not null"`
+	ActorType  string    `json:"actor_type" gorm:"size:20;not null"` // user | api_key | platform
+	ActorID    string    `json:"actor_id" gorm:"size:255"`           // user id, api-key fingerprint, or empty
+	ActorEmail string    `json:"actor_email" gorm:"size:255"`
+	Action     string    `json:"action" gorm:"size:100;index:idx_audit_logs_lookup,priority:2;not null"`
+	Method     string    `json:"method" gorm:"size:10;not null"`
+	Path       string    `json:"path" gorm:"size:500;not null"`
+	ResourceID string    `json:"resource_id" gorm:"size:255;index"` // instance/webhook/contact id when known
+	Status     int       `json:"status" gorm:"not null"`
+	RequestID  string    `json:"request_id" gorm:"size:64"`
+	ClientIP   string    `json:"client_ip" gorm:"size:64"`
+	CreatedAt  time.Time `json:"created_at" gorm:"index:idx_audit_logs_lookup,priority:3"`
+}
+
 type AISettings struct {
 	ID           string    `json:"id" gorm:"type:uuid;primaryKey"`
 	TenantID     string    `json:"tenant_id" gorm:"type:uuid;uniqueIndex;not null"`
@@ -333,6 +352,7 @@ func (w *WebhookEndpoint) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 func (w *WebhookDelivery) BeforeCreate(_ *gorm.DB) error       { ensureID(&w.ID); return nil }
+func (a *AuditLog) BeforeCreate(_ *gorm.DB) error              { ensureID(&a.ID); return nil }
 func (a *AISettings) BeforeCreate(_ *gorm.DB) error            { ensureID(&a.ID); return nil }
 func (a *AIConversationMessage) BeforeCreate(_ *gorm.DB) error { ensureID(&a.ID); return nil }
 

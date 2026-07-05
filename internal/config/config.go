@@ -41,6 +41,7 @@ type RateLimitConfig struct {
 	MessagesPerMinute     int
 	BroadcastPerHour      int
 	WebhookCallsPerMinute int
+	LoginPerMinute        int
 }
 
 type AIConfig struct {
@@ -112,6 +113,7 @@ func Load() (*Config, error) {
 				MessagesPerMinute:     getInt("RATE_LIMIT_MESSAGES_PER_MINUTE", 60),
 				BroadcastPerHour:      getInt("RATE_LIMIT_BROADCAST_PER_HOUR", 120),
 				WebhookCallsPerMinute: getInt("RATE_LIMIT_WEBHOOK_CALLS_PER_MINUTE", 120),
+				LoginPerMinute:        getInt("RATE_LIMIT_LOGIN_PER_MINUTE", 10),
 			},
 			AI: AIConfig{
 				OpenAIAPIKey: getEnv("OPENAI_API_KEY", ""),

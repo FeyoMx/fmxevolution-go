@@ -25,6 +25,7 @@ type Stores struct {
 	Broadcasts           BroadcastRepository
 	Webhooks             WebhookRepository
 	AI                   AIRepository
+	Audit                AuditRepository
 }
 
 func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration) (*Stores, error) {
@@ -66,6 +67,7 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 		&WebhookDelivery{},
 		&AISettings{},
 		&AIConversationMessage{},
+		&AuditLog{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
@@ -82,6 +84,7 @@ func NewStores(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifeti
 		Broadcasts:           &gormBroadcastRepository{db: db},
 		Webhooks:             &gormWebhookRepository{db: db},
 		AI:                   &gormAIRepository{db: db},
+		Audit:                &gormAuditRepository{db: db},
 	}, nil
 }
 
@@ -879,6 +882,30 @@ func (r *gormWebhookRepository) ListByTenant(ctx context.Context, tenantID strin
 	var endpoints []WebhookEndpoint
 	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&endpoints, "tenant_id = ?", tenantID).Error
 	return endpoints, err
+}
+
+type gormAuditRepository struct{ db *gorm.DB }
+
+func (r *gormAuditRepository) Create(ctx context.Context, entry *AuditLog) error {
+	return r.db.WithContext(ctx).Create(entry).Error
+}
+
+func (r *gormAuditRepository) ListByTenant(ctx context.Context, tenantID string, filter AuditLogFilter) ([]AuditLog, error) {
+	query := r.db.WithContext(ctx).Where("tenant_id = ?", tenantID)
+	if filter.Action != "" {
+		query = query.Where("action = ?", filter.Action)
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	if filter.Offset > 0 {
+		query = query.Offset(filter.Offset)
+	}
+
+	var entries []AuditLog
+	err := query.Order("created_at DESC").Limit(limit).Find(&entries).Error
+	return entries, err
 }
 
 type gormAIRepository struct{ db *gorm.DB }
