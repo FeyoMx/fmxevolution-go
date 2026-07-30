@@ -116,7 +116,6 @@ type UpdateGroupRequestParticipantsStruct struct {
 	Participants []string `json:"participants"`
 }
 
-
 func (g *groupService) ensureClientConnected(instanceId string) (*whatsmeow.Client, error) {
 	client := g.clientPointer[instanceId]
 	g.loggerWrapper.GetLogger(instanceId).LogInfo("[%s] Checking client connection status - Client exists: %v", instanceId, client != nil)

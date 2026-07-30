@@ -269,7 +269,7 @@ func (l *labelHandler) MessageUnlabel(ctx *gin.Context) {
 // @Produce json
 // @Success 200 {object} gin.H "success"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /label [get]
+// @Router /label/list [get]
 func (l *labelHandler) GetLabels(ctx *gin.Context) {
 	getInstance := ctx.MustGet("instance")
 

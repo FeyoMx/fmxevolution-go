@@ -3,6 +3,7 @@ module github.com/EvolutionAPI/evolution-go
 go 1.25.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/chai2010/webp v1.1.1
 	github.com/gabriel-vasile/mimetype v1.4.5
 	github.com/gin-gonic/gin v1.10.0

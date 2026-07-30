@@ -3,6 +3,7 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -219,6 +220,21 @@ func ParseJID(arg string) (whatsmeow_types.JID, bool) {
 	return recipient, true
 }
 
+// CanonicalJID returns a JID safe for RAW protocol nodes (chatstate / typing,
+// read receipts, presence subscribe, reactions, etc.).
+//
+// CreateJID intentionally prefixes phone numbers with "+" (e.g.
+// "+554187083284@s.whatsapp.net") to match the IsOnWhatsApp/display convention.
+// Message sending tolerates this because whatsmeow normalizes the JID during
+// usync/device resolution. RAW nodes are sent WITHOUT usync, so a malformed
+// "+JID" reaches the server and the node is silently dropped (e.g. the "typing"
+// indicator never reaches the recipient). WhatsApp user JIDs are digits-only, so
+// strip the leading "+" to get the canonical form.
+func CanonicalJID(jid whatsmeow_types.JID) whatsmeow_types.JID {
+	jid.User = strings.TrimPrefix(jid.User, "+")
+	return jid
+}
+
 func CreateHTTPProxy(httpHost, httpPort, user, password string) (func(*http.Request) (*url.URL, error), error) {
 	address := fmt.Sprintf("http://%s:%s@%s:%s", user, password, httpHost, httpPort)
 
@@ -256,6 +272,66 @@ func CreateSocks5Proxy(socks5Host, socks5Port, user, password string) (proxy.Dia
 
 	// 	return nil, nil
 	// }, nil
+}
+
+// NormalizeProxyProtocol returns the proxy protocol normalized to one of
+// http/https/socks5. If not supplied, it is inferred from the port — ports
+// 1080, 2080, and 42000-43000 map to socks5; everything else defaults to http.
+func NormalizeProxyProtocol(protocol, port string) string {
+	normalized := strings.ToLower(strings.TrimSpace(protocol))
+
+	switch normalized {
+	case "socks":
+		return "socks5"
+	case "http", "https", "socks5":
+		return normalized
+	}
+
+	switch strings.TrimSpace(port) {
+	case "1080", "2080":
+		return "socks5"
+	}
+
+	portNum, err := strconv.Atoi(strings.TrimSpace(port))
+	if err == nil && portNum >= 42000 && portNum <= 43000 {
+		return "socks5"
+	}
+
+	return "http"
+}
+
+// BuildProxyAddress builds a proxy URL string suitable for whatsmeow's
+// client.SetProxyAddress — it supports http, https, and socks5 with optional
+// basic auth credentials.
+func BuildProxyAddress(protocol, host, port, user, password string) (string, error) {
+	if strings.TrimSpace(host) == "" {
+		return "", fmt.Errorf("proxy host is required")
+	}
+
+	if strings.TrimSpace(port) == "" {
+		return "", fmt.Errorf("proxy port is required")
+	}
+
+	normalizedProtocol := NormalizeProxyProtocol(protocol, port)
+
+	if normalizedProtocol != "http" && normalizedProtocol != "https" && normalizedProtocol != "socks5" {
+		return "", fmt.Errorf("unsupported proxy protocol %q", protocol)
+	}
+
+	proxyURL := &url.URL{
+		Scheme: normalizedProtocol,
+		Host:   net.JoinHostPort(strings.TrimSpace(host), strings.TrimSpace(port)),
+	}
+
+	if user != "" {
+		if password != "" {
+			proxyURL.User = url.UserPassword(user, password)
+		} else {
+			proxyURL.User = url.User(user)
+		}
+	}
+
+	return proxyURL.String(), nil
 }
 
 func UpdateUserInfo(values interface{}, field string, value string) interface{} {
@@ -452,6 +528,8 @@ func GetMessageType(waMsg *waE2E.Message) string {
 		return "template button reply"
 	case waMsg.InteractiveMessage != nil:
 		return "interactive"
+	case waMsg.GetInteractiveResponseMessage() != nil:
+		return "interactive response"
 	case waMsg.ListMessage != nil:
 		return "list"
 	case waMsg.ProductMessage != nil:

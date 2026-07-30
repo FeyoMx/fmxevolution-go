@@ -47,6 +47,7 @@ type Config struct {
 	WhatsappVersionMajor int
 	WhatsappVersionMinor int
 	WhatsappVersionPatch int
+	ProxyProtocol        string
 	ProxyHost            string
 	ProxyPort            string
 	ProxyUsername        string
@@ -67,7 +68,6 @@ type Config struct {
 	LogMaxAge     int
 	LogDirectory  string
 	LogCompress   bool
-
 }
 
 // EnsureDBExists connects to postgres (without the target database) and creates it if it doesn't exist.
@@ -265,6 +265,7 @@ func Load() *Config {
 	whatsappVersionMinor := os.Getenv(config_env.WHATSAPP_VERSION_MINOR)
 	whatsappVersionPatch := os.Getenv(config_env.WHATSAPP_VERSION_PATCH)
 
+	proxyProtocol := os.Getenv(config_env.PROXY_PROTOCOL)
 	proxyHost := os.Getenv(config_env.PROXY_HOST)
 	proxyPort := os.Getenv(config_env.PROXY_PORT)
 	proxyUsername := os.Getenv(config_env.PROXY_USERNAME)
@@ -365,6 +366,7 @@ func Load() *Config {
 		WhatsappVersionMajor: major,
 		WhatsappVersionMinor: minor,
 		WhatsappVersionPatch: patch,
+		ProxyProtocol:        proxyProtocol,
 		ProxyHost:            proxyHost,
 		ProxyPort:            proxyPort,
 		ProxyUsername:        proxyUsername,

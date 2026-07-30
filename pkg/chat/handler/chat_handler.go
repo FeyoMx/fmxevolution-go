@@ -302,7 +302,7 @@ func (c *chatHandler) ChatUnmute(ctx *gin.Context) {
 // @Success 200 {object} gin.H "success"
 // @Failure 400 {object} gin.H "Error on validation"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /chat/history-sync-request [post]
+// @Router /chat/history-sync [post]
 func (c *chatHandler) HistorySyncRequest(ctx *gin.Context) {
 	getInstance := ctx.MustGet("instance")
 
