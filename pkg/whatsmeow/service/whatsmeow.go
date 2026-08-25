@@ -211,23 +211,43 @@ func DeleteKillChannel(channels map[string]chan bool, instanceID string) {
 	deleteKillChannel(channels, instanceID)
 }
 
+// signalKillChannel closes the instance's kill channel, if present, and removes
+// it from the map — signal and removal happen under a single write lock so no
+// other goroutine can observe a half-updated state (e.g. channel still in the
+// map but already closed, or channel removed but never signaled). close() is
+// used instead of a value send because it is safe to fan out to every reader
+// blocked on the channel (StartClient's loop) even if multiple goroutines call
+// this for the same instance — the sync.Once-style guard below makes repeated
+// calls a no-op instead of a "close of closed channel" panic.
 func signalKillChannel(channels map[string]chan bool, instanceID string) bool {
-	ch := getKillChannel(channels, instanceID)
-	if ch == nil {
+	whatsmeowClientStateMu.Lock()
+	defer whatsmeowClientStateMu.Unlock()
+
+	ch, ok := channels[instanceID]
+	if !ok || ch == nil {
 		return false
 	}
+
 	select {
-	case ch <- true:
-		return true
+	case <-ch:
+		// Already closed by a concurrent caller; nothing to do.
 	default:
-		return false
+		close(ch)
 	}
+
+	delete(channels, instanceID)
+	return true
 }
 
 func SignalKillChannel(channels map[string]chan bool, instanceID string) bool {
 	return signalKillChannel(channels, instanceID)
 }
 
+// deleteClientState removes the client, MyClient, and kill channel entries for
+// an instance. It no longer closes the kill channel itself — callers that need
+// to wake up StartClient's loop must go through signalKillChannel first, which
+// closes-then-deletes atomically. Calling this directly (e.g. after the loop
+// has already exited on its own) just clears any leftover map entries.
 func deleteClientState(clients map[string]*whatsmeow.Client, myClients map[string]*MyClient, channels map[string]chan bool, instanceID string) {
 	whatsmeowClientStateMu.Lock()
 	defer whatsmeowClientStateMu.Unlock()
@@ -1101,75 +1121,100 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 
 	// Removed auto-reconnect logic to prevent infinite loops
 
-	for {
-		killChan := getKillChannel(w.killChannel, cd.Instance.Id)
-		if killChan == nil {
-			w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("Kill channel missing for user '%s'; stopping client loop", cd.Instance.Id)
-			return
-		}
-		select {
-		case <-killChan:
-			w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("Received kill signal for user '%s'", cd.Instance.Id)
-			client.Disconnect()
-
-			deleteClientState(w.clientPointer, w.myClientPointer, w.killChannel, cd.Instance.Id)
-
-			// Limpar cache de userInfo para esta instância
-			w.userInfoCache.Delete(cd.Instance.Token)
-			w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("[%s] UserInfo cache cleared for token: %s", cd.Instance.Id, cd.Instance.Token)
-
-			cd.Instance.Connected = false
-
-			err := w.instanceRepository.UpdateConnected(cd.Instance.Id, cd.Instance.Connected, cd.Instance.DisconnectReason)
-			if err != nil {
-				w.loggerWrapper.GetLogger(cd.Instance.Id).LogError("[%s] Error updating instance: %s", cd.Instance.Id, err)
-			}
-
-			postMap := make(map[string]interface{})
-
-			postMap["event"] = "LoggedOut"
-
-			dataMap := make(map[string]interface{})
-
-			dataMap["reason"] = "Logged out"
-
-			postMap["data"] = dataMap
-
-			postMap["instanceToken"] = mycli.token
-			postMap["instanceId"] = mycli.userID
-			postMap["instanceName"] = cd.Instance.Name
-
-			var queueName string
-
-			if _, ok := postMap["event"]; ok {
-				queueName = strings.ToLower(fmt.Sprintf("%s.%s", cd.Instance.Id, postMap["event"]))
-			}
-
-			values, err := json.Marshal(postMap)
-			if err != nil {
-				w.loggerWrapper.GetLogger(cd.Instance.Id).LogError("[%s] Failed to marshal JSON for queue", cd.Instance.Id)
-				return
-			}
-
-			go w.CallWebhook(cd.Instance, queueName, values)
-
-			if mycli.config.AmqpGlobalEnabled || mycli.config.NatsGlobalEnabled {
-				go mycli.service.SendToGlobalQueues(postMap["event"].(string), values, mycli.userID)
-			}
-
-			// restart client
-			w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("[%s] Restarting client", cd.Instance.Id)
-			w.StartClient(cd)
-			return
-		default:
-			time.Sleep(1000 * time.Millisecond)
-		}
+	// Capture the kill channel once, outside the loop, instead of re-reading it
+	// from the shared map on every iteration. Re-reading was the source of the
+	// "Kill channel missing for user" leak: if signalKillChannel/deleteClientState
+	// removed the map entry for any reason (QR timeout, a concurrent reconnect,
+	// ForceUpdateJid, ...) between iterations, getKillChannel returned nil and
+	// this loop returned immediately WITHOUT calling client.Disconnect() — the
+	// underlying whatsmeow.Client (websocket, internal goroutines, buffers) kept
+	// running orphaned in memory while a fresh instance was started on top of it.
+	// The defer below guarantees the disconnect happens on every exit path.
+	killChan := getKillChannel(w.killChannel, cd.Instance.Id)
+	if killChan == nil {
+		w.loggerWrapper.GetLogger(cd.Instance.Id).LogWarn("[%s] Kill channel missing right after start; disconnecting client defensively", cd.Instance.Id)
+		client.Disconnect()
+		return
 	}
+
+	defer func() {
+		client.Disconnect()
+	}()
+
+	// close(killChan) (see signalKillChannel) unblocks this receive immediately,
+	// so there is no need to poll — this also removes the busy-wait that used to
+	// wake up every second regardless of activity.
+	<-killChan
+
+	w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("Received kill signal for user '%s'", cd.Instance.Id)
+
+	// The channel is already removed from the map by signalKillChannel; this
+	// clears clientPointer/myClientPointer (a no-op for killChannel itself).
+	deleteClientState(w.clientPointer, w.myClientPointer, w.killChannel, cd.Instance.Id)
+
+	// Limpar cache de userInfo para esta instância
+	w.userInfoCache.Delete(cd.Instance.Token)
+	w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("[%s] UserInfo cache cleared for token: %s", cd.Instance.Id, cd.Instance.Token)
+
+	cd.Instance.Connected = false
+
+	err = w.instanceRepository.UpdateConnected(cd.Instance.Id, cd.Instance.Connected, cd.Instance.DisconnectReason)
+	if err != nil {
+		w.loggerWrapper.GetLogger(cd.Instance.Id).LogError("[%s] Error updating instance: %s", cd.Instance.Id, err)
+	}
+
+	postMap := make(map[string]interface{})
+
+	postMap["event"] = "LoggedOut"
+
+	dataMap := make(map[string]interface{})
+
+	dataMap["reason"] = "Logged out"
+
+	postMap["data"] = dataMap
+
+	postMap["instanceToken"] = mycli.token
+	postMap["instanceId"] = mycli.userID
+	postMap["instanceName"] = cd.Instance.Name
+
+	var queueName string
+
+	if _, ok := postMap["event"]; ok {
+		queueName = strings.ToLower(fmt.Sprintf("%s.%s", cd.Instance.Id, postMap["event"]))
+	}
+
+	values, err := json.Marshal(postMap)
+	if err != nil {
+		w.loggerWrapper.GetLogger(cd.Instance.Id).LogError("[%s] Failed to marshal JSON for queue", cd.Instance.Id)
+		return
+	}
+
+	go w.CallWebhook(cd.Instance, queueName, values)
+
+	if mycli.config.AmqpGlobalEnabled || mycli.config.NatsGlobalEnabled {
+		go mycli.service.SendToGlobalQueues(postMap["event"].(string), values, mycli.userID)
+	}
+
+	// restart client
+	w.loggerWrapper.GetLogger(cd.Instance.Id).LogInfo("[%s] Restarting client", cd.Instance.Id)
+	w.StartClient(cd)
 }
 
 func schedulePresenceUpdates(mycli *MyClient) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
+
+	// Capture the kill channel once instead of calling getKillChannel(...) inside
+	// the select on every iteration. A nil channel in a select case is never
+	// selected (it blocks forever), so re-fetching it after signalKillChannel has
+	// already removed the map entry silently disabled kill-signal handling here —
+	// this goroutine would then run until the ticker's own "instance no longer
+	// exists" check happened to catch it, or forever if that lookup kept succeeding.
+	killChan := getKillChannel(mycli.killChannel, mycli.userID)
+	if killChan == nil {
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Kill channel missing at presence-updates start; exiting immediately", mycli.userID)
+		return
+	}
 
 	for {
 		select {
@@ -1187,7 +1232,7 @@ func schedulePresenceUpdates(mycli *MyClient) {
 			randomInterval := time.Duration(1+rand.Intn(3)) * time.Hour
 			ticker = time.NewTicker(randomInterval)
 
-		case <-getKillChannel(mycli.killChannel, mycli.userID):
+		case <-killChan:
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Received kill signal, stopping presence updates", mycli.userID)
 			return // Encerra a goroutine quando receber sinal de kill
 		}
