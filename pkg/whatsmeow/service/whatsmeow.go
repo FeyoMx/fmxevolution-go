@@ -1723,55 +1723,143 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				var mimeType string
 				var mediaSize int64
 
-				// Create context with timeout for large files
-				downloadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
+				// Peek at the declared size (from WhatsApp's own metadata) for the
+				// four directly-attached media types BEFORE downloading anything.
+				// Associated child media (view-once replies, reactions with media,
+				// etc.) rarely carries large payloads in practice and is left out
+				// of this check to keep the change scoped to the case that caused
+				// the 2026-08-25 incident (a single ~160MB video, base64-inlined to
+				// a ~212MB webhook payload that also got rejected downstream with
+				// 413 Request Entity Too Large — wasted memory and wasted work).
+				var declaredSize int64
+				switch {
+				case img != nil && img.FileLength != nil:
+					declaredSize = int64(*img.FileLength)
+				case audio != nil && audio.FileLength != nil:
+					declaredSize = int64(*audio.FileLength)
+				case document != nil && document.FileLength != nil:
+					declaredSize = int64(*document.FileLength)
+				case video != nil && video.FileLength != nil:
+					declaredSize = int64(*video.FileLength)
+				case sticker != nil && sticker.FileLength != nil:
+					declaredSize = int64(*sticker.FileLength)
+				}
 
-				downloadStart := time.Now()
+				inlineLimit := config.DefaultMediaInlineMaxBytes
+				if mycli.config != nil && mycli.config.MediaInlineMaxBytes > 0 {
+					inlineLimit = mycli.config.MediaInlineMaxBytes
+				}
 
-				// Handle regular media messages
-				if img != nil {
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading image - ID: %s", mycli.userID, evt.Info.ID)
-					data, err = mycli.WAClient.Download(downloadCtx, img)
-					extension = ".jpg"
-					mimeType = "image/jpeg"
-					if img.FileLength != nil {
-						mediaSize = int64(*img.FileLength)
-					}
-				} else if audio != nil {
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading audio - ID: %s", mycli.userID, evt.Info.ID)
-					data, err = mycli.WAClient.Download(downloadCtx, audio)
-					extension = ".ogg"
-					mimeType = "audio/ogg"
-					if audio.FileLength != nil {
-						mediaSize = int64(*audio.FileLength)
-					}
-				} else if document != nil {
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading document - ID: %s, FileName: %s, Size: %d bytes", mycli.userID, evt.Info.ID, document.GetFileName(), document.GetFileLength())
-					data, err = mycli.WAClient.Download(downloadCtx, document)
-					extension = getExtensionFromMimeType(document.GetMimetype())
-					mimeType = document.GetMimetype()
-					if document.FileLength != nil {
-						mediaSize = int64(*document.FileLength)
-					}
-				} else if video != nil {
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading video - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, video.GetFileLength())
-					data, err = mycli.WAClient.Download(downloadCtx, video)
-					extension = ".mp4"
-					mimeType = "video/mp4"
-					if video.FileLength != nil {
-						mediaSize = int64(*video.FileLength)
-					}
-				} else if sticker != nil {
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading sticker - ID: %s", mycli.userID, evt.Info.ID)
-					data, err = mycli.WAClient.Download(downloadCtx, sticker)
-					extension = ".png"
-					mimeType = "image/png"
-					if sticker.FileLength != nil {
-						mediaSize = int64(*sticker.FileLength)
-					}
+				useExternalMediaStorageForSizeCheck := mycli.config != nil && mycli.config.MinioEnabled && hasMediaStorage(mycli.mediaStorage)
 
-					if err == nil {
+				isDirectMedia := img != nil || audio != nil || document != nil || video != nil || sticker != nil
+				skipDownload := isDirectMedia && !useExternalMediaStorageForSizeCheck && declaredSize > inlineLimit
+
+				if skipDownload {
+					mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Skipping media download - ID: %s, DeclaredSize: %d bytes exceeds inline limit %d bytes and no external media storage is configured", mycli.userID, evt.Info.ID, declaredSize, inlineLimit)
+
+					messageMap, ok := dataMap["Message"].(map[string]interface{})
+					if !ok {
+						messageMap = make(map[string]interface{})
+					}
+					messageMap["mediaOmitted"] = true
+					messageMap["mediaOmittedReason"] = fmt.Sprintf("declared size %d bytes exceeds inline limit %d bytes; enable MinIO/S3 media storage to receive large media via URL instead", declaredSize, inlineLimit)
+					messageMap["mediaSize"] = declaredSize
+					dataMap["Message"] = messageMap
+				} else {
+
+					// Create context with timeout for large files
+					downloadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
+
+					downloadStart := time.Now()
+
+					// Handle regular media messages
+					if img != nil {
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading image - ID: %s", mycli.userID, evt.Info.ID)
+						data, err = mycli.WAClient.Download(downloadCtx, img)
+						extension = ".jpg"
+						mimeType = "image/jpeg"
+						if img.FileLength != nil {
+							mediaSize = int64(*img.FileLength)
+						}
+					} else if audio != nil {
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading audio - ID: %s", mycli.userID, evt.Info.ID)
+						data, err = mycli.WAClient.Download(downloadCtx, audio)
+						extension = ".ogg"
+						mimeType = "audio/ogg"
+						if audio.FileLength != nil {
+							mediaSize = int64(*audio.FileLength)
+						}
+					} else if document != nil {
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading document - ID: %s, FileName: %s, Size: %d bytes", mycli.userID, evt.Info.ID, document.GetFileName(), document.GetFileLength())
+						data, err = mycli.WAClient.Download(downloadCtx, document)
+						extension = getExtensionFromMimeType(document.GetMimetype())
+						mimeType = document.GetMimetype()
+						if document.FileLength != nil {
+							mediaSize = int64(*document.FileLength)
+						}
+					} else if video != nil {
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading video - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, video.GetFileLength())
+						data, err = mycli.WAClient.Download(downloadCtx, video)
+						extension = ".mp4"
+						mimeType = "video/mp4"
+						if video.FileLength != nil {
+							mediaSize = int64(*video.FileLength)
+						}
+					} else if sticker != nil {
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Downloading sticker - ID: %s", mycli.userID, evt.Info.ID)
+						data, err = mycli.WAClient.Download(downloadCtx, sticker)
+						extension = ".png"
+						mimeType = "image/png"
+						if sticker.FileLength != nil {
+							mediaSize = int64(*sticker.FileLength)
+						}
+
+						if err == nil {
+							webpReader := bytes.NewReader(data)
+							img, err := webp.Decode(webpReader)
+							if err != nil {
+								mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to decode webp image: %v", mycli.userID, err)
+								return
+							}
+
+							var pngBuffer bytes.Buffer
+							err = png.Encode(&pngBuffer, img)
+							if err != nil {
+								mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to encode png image: %v", mycli.userID, err)
+								return
+							}
+
+							data = pngBuffer.Bytes()
+						}
+						// Handle associated child media messages
+					} else if associatedImg != nil {
+						data, err = mycli.WAClient.Download(context.Background(), associatedImg)
+						extension = ".jpg"
+						mimeType = "image/jpeg"
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child image message", mycli.userID)
+					} else if associatedAudio != nil {
+						data, err = mycli.WAClient.Download(context.Background(), associatedAudio)
+						extension = ".ogg"
+						mimeType = "audio/ogg"
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child audio message", mycli.userID)
+					} else if associatedDocument != nil {
+						data, err = mycli.WAClient.Download(context.Background(), associatedDocument)
+						extension = getExtensionFromMimeType(associatedDocument.GetMimetype())
+						mimeType = associatedDocument.GetMimetype()
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child document message", mycli.userID)
+					} else if associatedVideo != nil {
+						data, err = mycli.WAClient.Download(context.Background(), associatedVideo)
+						extension = ".mp4"
+						mimeType = "video/mp4"
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child video message", mycli.userID)
+					} else if associatedSticker != nil {
+						data, err = mycli.WAClient.Download(context.Background(), associatedSticker)
+						extension = ".png"
+						mimeType = "image/png"
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child sticker message", mycli.userID)
+
 						webpReader := bytes.NewReader(data)
 						img, err := webp.Decode(webpReader)
 						if err != nil {
@@ -1788,123 +1876,81 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 						data = pngBuffer.Bytes()
 					}
-					// Handle associated child media messages
-				} else if associatedImg != nil {
-					data, err = mycli.WAClient.Download(context.Background(), associatedImg)
-					extension = ".jpg"
-					mimeType = "image/jpeg"
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child image message", mycli.userID)
-				} else if associatedAudio != nil {
-					data, err = mycli.WAClient.Download(context.Background(), associatedAudio)
-					extension = ".ogg"
-					mimeType = "audio/ogg"
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child audio message", mycli.userID)
-				} else if associatedDocument != nil {
-					data, err = mycli.WAClient.Download(context.Background(), associatedDocument)
-					extension = getExtensionFromMimeType(associatedDocument.GetMimetype())
-					mimeType = associatedDocument.GetMimetype()
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child document message", mycli.userID)
-				} else if associatedVideo != nil {
-					data, err = mycli.WAClient.Download(context.Background(), associatedVideo)
-					extension = ".mp4"
-					mimeType = "video/mp4"
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child video message", mycli.userID)
-				} else if associatedSticker != nil {
-					data, err = mycli.WAClient.Download(context.Background(), associatedSticker)
-					extension = ".png"
-					mimeType = "image/png"
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing associated child sticker message", mycli.userID)
 
-					webpReader := bytes.NewReader(data)
-					img, err := webp.Decode(webpReader)
+					downloadDuration := time.Since(downloadStart)
+
 					if err != nil {
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to decode webp image: %v", mycli.userID, err)
-						return
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to download media - ID: %s, Size: %d bytes, Duration: %v, Error: %v", mycli.userID, evt.Info.ID, mediaSize, downloadDuration, err)
+
+						// Check if it's a timeout error
+						if downloadCtx.Err() == context.DeadlineExceeded {
+							mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Download timeout exceeded (5 minutes) for large file - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, mediaSize)
+						}
+
+						// Don't return here - continue processing the message without media
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Continuing message processing without media download - ID: %s", mycli.userID, evt.Info.ID)
+					} else {
+						actualSize := len(data)
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Media download successful - ID: %s, Expected: %d bytes, Actual: %d bytes, Duration: %v", mycli.userID, evt.Info.ID, mediaSize, actualSize, downloadDuration)
+
+						// Check for size mismatch
+						if mediaSize > 0 && int64(actualSize) != mediaSize {
+							mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Size mismatch detected - ID: %s, Expected: %d, Got: %d", mycli.userID, evt.Info.ID, mediaSize, actualSize)
+						}
+
+						// Log large file processing
+						if actualSize > 13*1024*1024 { // 13MB
+							mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing large file (>13MB) - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, actualSize)
+						}
 					}
 
-					var pngBuffer bytes.Buffer
-					err = png.Encode(&pngBuffer, img)
-					if err != nil {
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to encode png image: %v", mycli.userID, err)
-						return
+					messageMap, ok := dataMap["Message"].(map[string]interface{})
+					if !ok {
+						messageMap = make(map[string]interface{})
 					}
 
-					data = pngBuffer.Bytes()
-				}
+					// Only process storage if download was successful
+					if err == nil && len(data) > 0 {
+						useExternalMediaStorage := mycli.config != nil && mycli.config.MinioEnabled && hasMediaStorage(mycli.mediaStorage)
+						if mycli.config != nil && mycli.config.MinioEnabled && !useExternalMediaStorage {
+							mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Minio/S3 is enabled but media storage is not initialized; falling back to base64 - ID: %s", mycli.userID, evt.Info.ID)
+						}
 
-				downloadDuration := time.Since(downloadStart)
+						if useExternalMediaStorage {
+							fileName := evt.Info.ID + extension
+							storageStart := time.Now()
 
-				if err != nil {
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to download media - ID: %s, Size: %d bytes, Duration: %v, Error: %v", mycli.userID, evt.Info.ID, mediaSize, downloadDuration, err)
+							mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Uploading to S3/Minio - ID: %s, FileName: %s, Size: %d bytes", mycli.userID, evt.Info.ID, fileName, len(data))
 
-					// Check if it's a timeout error
-					if downloadCtx.Err() == context.DeadlineExceeded {
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Download timeout exceeded (5 minutes) for large file - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, mediaSize)
-					}
+							mediaURL, err := mycli.mediaStorage.Store(context.Background(), data, fileName, mimeType)
+							storageDuration := time.Since(storageStart)
 
-					// Don't return here - continue processing the message without media
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Continuing message processing without media download - ID: %s", mycli.userID, evt.Info.ID)
-				} else {
-					actualSize := len(data)
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Media download successful - ID: %s, Expected: %d bytes, Actual: %d bytes, Duration: %v", mycli.userID, evt.Info.ID, mediaSize, actualSize, downloadDuration)
+							if err != nil {
+								mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to store media in S3/Minio - ID: %s, Size: %d bytes, Duration: %v, Error: %v", mycli.userID, evt.Info.ID, len(data), storageDuration, err)
 
-					// Check for size mismatch
-					if mediaSize > 0 && int64(actualSize) != mediaSize {
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Size mismatch detected - ID: %s, Expected: %d, Got: %d", mycli.userID, evt.Info.ID, mediaSize, actualSize)
-					}
-
-					// Log large file processing
-					if actualSize > 13*1024*1024 { // 13MB
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Processing large file (>13MB) - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, actualSize)
-					}
-				}
-
-				messageMap, ok := dataMap["Message"].(map[string]interface{})
-				if !ok {
-					messageMap = make(map[string]interface{})
-				}
-
-				// Only process storage if download was successful
-				if err == nil && len(data) > 0 {
-					useExternalMediaStorage := mycli.config != nil && mycli.config.MinioEnabled && hasMediaStorage(mycli.mediaStorage)
-					if mycli.config != nil && mycli.config.MinioEnabled && !useExternalMediaStorage {
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Minio/S3 is enabled but media storage is not initialized; falling back to base64 - ID: %s", mycli.userID, evt.Info.ID)
-					}
-
-					if useExternalMediaStorage {
-						fileName := evt.Info.ID + extension
-						storageStart := time.Now()
-
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Uploading to S3/Minio - ID: %s, FileName: %s, Size: %d bytes", mycli.userID, evt.Info.ID, fileName, len(data))
-
-						mediaURL, err := mycli.mediaStorage.Store(context.Background(), data, fileName, mimeType)
-						storageDuration := time.Since(storageStart)
-
-						if err != nil {
-							mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to store media in S3/Minio - ID: %s, Size: %d bytes, Duration: %v, Error: %v", mycli.userID, evt.Info.ID, len(data), storageDuration, err)
-
-							// Continue processing without storage URL
-							mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Continuing message processing without S3 URL - ID: %s", mycli.userID, evt.Info.ID)
+								// Continue processing without storage URL
+								mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Continuing message processing without S3 URL - ID: %s", mycli.userID, evt.Info.ID)
+							} else {
+								mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] S3/Minio upload successful - ID: %s, Size: %d bytes, Duration: %v, URL: %s", mycli.userID, evt.Info.ID, len(data), storageDuration, mediaURL)
+								messageMap["mediaUrl"] = mediaURL
+								messageMap["mimetype"] = mimeType
+							}
 						} else {
-							mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] S3/Minio upload successful - ID: %s, Size: %d bytes, Duration: %v, URL: %s", mycli.userID, evt.Info.ID, len(data), storageDuration, mediaURL)
-							messageMap["mediaUrl"] = mediaURL
-							messageMap["mimetype"] = mimeType
+							mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Encoding to base64 - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, len(data))
+							encodeStart := time.Now()
+
+							encodeData := base64.StdEncoding.EncodeToString(data)
+							encodeDuration := time.Since(encodeStart)
+
+							mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Base64 encoding completed - ID: %s, Original: %d bytes, Encoded: %d chars, Duration: %v", mycli.userID, evt.Info.ID, len(data), len(encodeData), encodeDuration)
+							messageMap["base64"] = encodeData
 						}
 					} else {
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Encoding to base64 - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, len(data))
-						encodeStart := time.Now()
-
-						encodeData := base64.StdEncoding.EncodeToString(data)
-						encodeDuration := time.Since(encodeStart)
-
-						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Base64 encoding completed - ID: %s, Original: %d bytes, Encoded: %d chars, Duration: %v", mycli.userID, evt.Info.ID, len(data), len(encodeData), encodeDuration)
-						messageMap["base64"] = encodeData
+						mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Skipping media storage due to download failure - ID: %s", mycli.userID, evt.Info.ID)
 					}
-				} else {
-					mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Skipping media storage due to download failure - ID: %s", mycli.userID, evt.Info.ID)
-				}
 
-				dataMap["Message"] = messageMap
+					dataMap["Message"] = messageMap
+				}
 			}
 		}
 

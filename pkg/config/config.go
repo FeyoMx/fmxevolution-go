@@ -16,6 +16,14 @@ import (
 	config_env "github.com/EvolutionAPI/evolution-go/pkg/config/env"
 )
 
+// DefaultMediaInlineMaxBytes is the fallback for Config.MediaInlineMaxBytes
+// when MEDIA_INLINE_MAX_BYTES is unset: 20MB of raw media, which becomes
+// ~26.7MB once base64-encoded — comfortably under typical reverse-proxy and
+// webhook-consumer body-size limits (e.g. nginx's default 1MB client_max_body_size
+// would already reject this, but n8n and similar tools are commonly configured
+// in the tens-of-MB range).
+const DefaultMediaInlineMaxBytes int64 = 20 * 1024 * 1024
+
 type Config struct {
 	PostgresAuthDB       string
 	postgresUsersDB      string
@@ -61,6 +69,17 @@ type Config struct {
 	EventIgnoreStatus    bool
 	QrcodeMaxCount       int
 	CheckUserExists      bool
+	// MediaInlineMaxBytes caps the size (in bytes, of the raw/undecoded media)
+	// that will be downloaded and inlined into a webhook payload as base64 when
+	// no external MediaStorage (Minio/S3) is configured. Media declaring a
+	// larger size is skipped: the message is still delivered, but with metadata
+	// only (mediaOmitted=true) instead of the binary content. This exists
+	// because base64-inlining large media (a large video, for example) both
+	// balloons memory (~1.33x the file size, held fully in RAM through download
+	// + base64 encode + JSON marshal) and typically gets rejected downstream
+	// anyway (e.g. n8n's default body-size limit returns 413), so the work is
+	// wasted twice over. 0 or unset falls back to DefaultMediaInlineMaxBytes.
+	MediaInlineMaxBytes int64
 
 	// Logger configurations
 	LogMaxSize    int
@@ -299,6 +318,13 @@ func Load() *Config {
 		qrMaxCount, _ = strconv.Atoi(qrcodeMaxCount)
 	}
 
+	mediaInlineMaxBytes := DefaultMediaInlineMaxBytes
+	if raw := os.Getenv(config_env.MEDIA_INLINE_MAX_BYTES); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			mediaInlineMaxBytes = parsed
+		}
+	}
+
 	amqpGlobalEvents := strings.Split(os.Getenv(config_env.AMQP_GLOBAL_EVENTS), ",")
 	if len(amqpGlobalEvents) == 1 && amqpGlobalEvents[0] == "" {
 		amqpGlobalEvents = []string{}
@@ -375,6 +401,7 @@ func Load() *Config {
 		EventIgnoreStatus:    eventIgnoreStatus == "true",
 		QrcodeMaxCount:       qrMaxCount,
 		CheckUserExists:      checkUserExists != "false", // Default true, set to false to disable
+		MediaInlineMaxBytes:  mediaInlineMaxBytes,
 		AmqpGlobalEvents:     amqpGlobalEvents,
 		AmqpSpecificEvents:   amqpSpecificEvents,
 		NatsUrl:              natsUrl,
