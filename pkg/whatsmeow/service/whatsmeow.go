@@ -211,6 +211,20 @@ func DeleteKillChannel(channels map[string]chan bool, instanceID string) {
 	deleteKillChannel(channels, instanceID)
 }
 
+// ensureKillChannel creates and stores a new kill channel for instanceID only
+// if one is not already present, atomically (check-and-set under a single write
+// lock). Used by StartClient so that a recursive self-restart (which bypasses
+// StartInstance's own setKillChannel call) still ends up with a channel, without
+// a separate check-then-act sequence racing a concurrent StartInstance/StartClient
+// call for the same instance.
+func ensureKillChannel(channels map[string]chan bool, instanceID string) {
+	whatsmeowClientStateMu.Lock()
+	defer whatsmeowClientStateMu.Unlock()
+	if channels[instanceID] == nil {
+		channels[instanceID] = make(chan bool)
+	}
+}
+
 // signalKillChannel closes the instance's kill channel, if present, and removes
 // it from the map — signal and removal happen under a single write lock so no
 // other goroutine can observe a half-updated state (e.g. channel still in the
@@ -694,6 +708,22 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 			return
 		}
 	}
+
+	// Ensure a kill channel exists for this instance before doing any other
+	// work. StartInstance already creates one (setKillChannel) before calling
+	// this function, so this is normally a no-op — but StartClient also calls
+	// itself directly after handling a kill signal (see the "restart client"
+	// call at the end of this function), bypassing StartInstance and its
+	// setKillChannel call entirely. Without this guard, that recursive restart
+	// left no kill channel for the new client: the very next line of this
+	// function used to log "Kill channel missing right after start" and
+	// disconnect the client it had just logged in — even though login
+	// succeeded — leaving the instance orphaned with no channel and nobody
+	// scheduled to retry (StartInstance's "client already exists" guard then
+	// skips its own next attempt). Production hit this exactly once so far:
+	// instance c95ff37e went silently offline for ~4.5 hours on 2026-08-25
+	// after a single Disconnected/LoggedOut event pair.
+	ensureKillChannel(w.killChannel, cd.Instance.Id)
 
 	var container *sqlstore.Container
 
