@@ -41,8 +41,10 @@ import (
 	legacyInstanceModel "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	legacyInstanceRepo "github.com/EvolutionAPI/evolution-go/pkg/instance/repository"
 	legacyInstanceService "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
+	legacyLabelModel "github.com/EvolutionAPI/evolution-go/pkg/label/model"
 	legacyLabelRepo "github.com/EvolutionAPI/evolution-go/pkg/label/repository"
 	legacyLogger "github.com/EvolutionAPI/evolution-go/pkg/logger"
+	legacyMessageModel "github.com/EvolutionAPI/evolution-go/pkg/message/model"
 	legacyMessageRepo "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
 	legacyUserService "github.com/EvolutionAPI/evolution-go/pkg/user/service"
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
@@ -178,6 +180,12 @@ func NewLegacyRuntime(logger *slog.Logger) (*LegacyRuntime, error) {
 	}
 	if err := usersDB.AutoMigrate(&legacyInstanceModel.Instance{}); err != nil {
 		return nil, fmt.Errorf("migrate legacy instance schema: %w", err)
+	}
+	if err := usersDB.AutoMigrate(&legacyMessageModel.Message{}); err != nil {
+		return nil, fmt.Errorf("migrate legacy message schema: %w", err)
+	}
+	if err := usersDB.AutoMigrate(&legacyLabelModel.Label{}); err != nil {
+		return nil, fmt.Errorf("migrate legacy label schema: %w", err)
 	}
 
 	var authDB *sql.DB
