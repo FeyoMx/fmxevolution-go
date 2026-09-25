@@ -202,6 +202,13 @@ func (r *gormInstanceRepository) ListByTenant(ctx context.Context, tenantID stri
 	return instances, err
 }
 
+// ListByStatus lists instances across all tenants with the given status.
+func (r *gormInstanceRepository) ListByStatus(ctx context.Context, status string) ([]Instance, error) {
+	var instances []Instance
+	err := r.db.WithContext(ctx).Order("created_at ASC").Find(&instances, "status = ?", status).Error
+	return instances, err
+}
+
 func (r *gormInstanceRepository) GetByID(ctx context.Context, tenantID, instanceID string) (*Instance, error) {
 	var instance Instance
 	err := r.db.WithContext(ctx).First(&instance, "tenant_id = ? AND id = ?", tenantID, instanceID).Error

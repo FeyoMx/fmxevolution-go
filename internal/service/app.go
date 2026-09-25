@@ -92,6 +92,9 @@ func (a *Application) Start(ctx context.Context) {
 	a.AI.Start(ctx)
 	a.Audit.Start(ctx)
 	a.Webhooks.Start(ctx)
+	if a.Instances != nil {
+		go a.Instances.BootstrapReconnectAll(ctx)
+	}
 }
 
 func (a *Application) Stop(ctx context.Context) error {

@@ -297,6 +297,69 @@ func (s *Service) Reconnect(ctx context.Context, tenantID, reference string) (*r
 	return instance, snapshot, nil
 }
 
+type instanceStatusLister interface {
+	ListByStatus(ctx context.Context, status string) ([]repository.Instance, error)
+}
+
+const bootstrapReconnectWorkers = 5
+
+// BootstrapReconnectAll reconnects every instance whose status is "open" when
+// the process starts. whatsmeow clients only live in memory and reconnect
+// lazily on an HTTP request, so after a restart an instance without traffic
+// stayed "open" in the DB with no socket (Auren Academy, 3h45m on 2026-09-11).
+func (s *Service) BootstrapReconnectAll(ctx context.Context) {
+	lister, ok := s.repo.(instanceStatusLister)
+	if !ok {
+		return
+	}
+
+	instances, err := lister.ListByStatus(ctx, "open")
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error("bootstrap reconnect: list open instances failed", "error", err)
+		}
+		return
+	}
+	if s.logger != nil {
+		s.logger.Info("bootstrap reconnect: starting", "instance_count", len(instances), "workers", bootstrapReconnectWorkers)
+	}
+
+	jobs := make(chan repository.Instance)
+	var wg sync.WaitGroup
+	for i := 0; i < bootstrapReconnectWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for instance := range jobs {
+				if _, _, err := s.ReconnectByID(ctx, instance.TenantID, instance.ID); err != nil {
+					if s.logger != nil {
+						s.logger.Warn("bootstrap reconnect: instance failed", "instance_id", instance.ID, "error", err)
+					}
+					continue
+				}
+				if s.logger != nil {
+					s.logger.Info("bootstrap reconnect: instance queued", "instance_id", instance.ID)
+				}
+			}
+		}()
+	}
+
+feed:
+	for _, instance := range instances {
+		select {
+		case jobs <- instance:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	if s.logger != nil {
+		s.logger.Info("bootstrap reconnect: finished", "instance_count", len(instances))
+	}
+}
+
 func (s *Service) ReconnectByID(ctx context.Context, tenantID, instanceID string) (*repository.Instance, *RuntimeSnapshot, error) {
 	instance, err := s.Get(ctx, tenantID, instanceID)
 	if err != nil {

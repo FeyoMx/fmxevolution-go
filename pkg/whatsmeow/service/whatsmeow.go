@@ -2391,6 +2391,30 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		} else {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] ID is not 66 or 67 or view_once, skipping", mycli.userID)
 		}
+	case *events.ClientOutdated:
+		// WhatsApp rejects the session (405) within seconds of every reconnect.
+		// Left unhandled, the instance looped open→connecting→close forever
+		// (2026-09-09). Drop the session and stop retrying so the next connect
+		// starts clean with a QR.
+		notifyRuntimeLifecycle(mycli.userID, "logout", "close", "client outdated", false, false, false, "ClientOutdated", "client outdated (405)", nil)
+		doWebhook = true
+		postMap["event"] = "ClientOutdated"
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] ClientOutdated, next connect will require QR pairing", mycli.userID)
+
+		mycli.userInfoCache.Delete(mycli.Instance.Token)
+		mycli.Instance.DisconnectReason = "ClientOutdated"
+		mycli.Instance.Connected = false
+		if err := mycli.instanceRepository.UpdateConnected(mycli.Instance.Id, mycli.Instance.Connected, mycli.Instance.DisconnectReason); err != nil {
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Error updating instance: %s", mycli.Instance.Id, err)
+		}
+
+		// The server already refused the connection, so a Logout IQ can't be
+		// sent; deleting the device store is what Client.Logout() does locally.
+		mycli.WAClient.Disconnect()
+		if err := mycli.WAClient.Store.Delete(context.Background()); err != nil {
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to delete device store after ClientOutdated: %v", mycli.userID, err)
+		}
+		signalKillChannel(mycli.killChannel, mycli.userID)
 	default:
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Unhandled event type=%s", mycli.userID, fmt.Sprintf("%T", evt))
 		return
