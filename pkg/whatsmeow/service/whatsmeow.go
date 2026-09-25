@@ -327,12 +327,37 @@ func notifyRuntimeLifecycle(instanceID, eventType, status, message string, conne
 	})
 }
 
+// whatsmeowLogLevel maps DEBUG_ENABLED to a whatsmeow log level. Anything that
+// is not a known level (e.g. "false") returns "" — waLog treats unknown levels
+// as 0 (DEBUG), so passing them through enabled full debug logging.
+func whatsmeowLogLevel(raw string) string {
+	level := strings.ToUpper(strings.TrimSpace(raw))
+	switch level {
+	case "DEBUG", "INFO", "WARN", "ERROR":
+		return level
+	default:
+		return ""
+	}
+}
+
 func notifyInboundConversationHistory(instanceID string, evt *events.Message, parsedMessageType string, dataMap map[string]interface{}) {
 	if evt == nil {
 		return
 	}
 
 	payload, _ := dataMap["Message"].(map[string]interface{})
+	if _, hasInlineMedia := payload["base64"]; hasInlineMedia {
+		// The inlined media is for the webhook only. Persisting it put 140GB of
+		// base64 into conversation_messages (2026-09-24). Copy so the webhook
+		// payload keeps it.
+		stripped := make(map[string]interface{}, len(payload))
+		for k, v := range payload {
+			if k != "base64" {
+				stripped[k] = v
+			}
+		}
+		payload = stripped
+	}
 	remoteJID := evt.Info.Chat.String()
 
 	chathistory.NotifyInboundMessage(chathistory.InboundMessage{
@@ -727,8 +752,9 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 
 	var container *sqlstore.Container
 
-	if w.config.WaDebug != "" {
-		dbLog := waLog.Stdout("Database", w.config.WaDebug, true)
+	waLevel := whatsmeowLogLevel(w.config.WaDebug)
+	if waLevel != "" {
+		dbLog := waLog.Stdout("Database", waLevel, true)
 		if w.config.PostgresAuthDB != "" {
 			container, err = sqlstore.New(context.Background(), "postgres", w.config.PostgresAuthDB, dbLog)
 		} else {
@@ -814,11 +840,11 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 		}
 	}
 
-	// 🔒 FIX: Sempre criar logger, mesmo que WaDebug esteja vazio
-	// Usar "INFO" como nível mínimo para garantir que logs importantes apareçam
-	minLevel := w.config.WaDebug
+	// Always create the client logger. Default to WARN: whatsmeow's INFO/DEBUG
+	// output (every IQ frame) was ~97% of syslog, 2-3GB/week, on 2026-09-24.
+	minLevel := waLevel
 	if minLevel == "" {
-		minLevel = "INFO" // Nível mínimo para garantir que logs INFO apareçam
+		minLevel = "WARN"
 	}
 	clientLog := waLog.Stdout("Client", minLevel, true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
